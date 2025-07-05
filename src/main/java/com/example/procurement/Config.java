@@ -52,4 +52,8 @@ public class Config {
             logger.error("Error updating admin IDs: {}", e.getMessage());
         }
     }
+
+    public static boolean getParserVerbose() {
+        return Boolean.parseBoolean(properties.getProperty("parser.verbose", "false"));
+    }
 }
