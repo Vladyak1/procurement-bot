@@ -1,0 +1,120 @@
+2025-06-22 22:28:47 [main] INFO  com.example.procurement.TelegramBot - Bot commands initialized
+2025-06-22 22:28:47 [main] INFO  com.example.procurement.Main - Telegram bot registered successfully
+2025-06-22 22:28:47 [main] INFO  org.quartz.impl.StdSchedulerFactory - Using default implementation for ThreadExecutor
+2025-06-22 22:28:47 [main] INFO  org.quartz.simpl.SimpleThreadPool - Job execution threads will use class loader of thread: main
+2025-06-22 22:28:47 [main] INFO  o.quartz.core.SchedulerSignalerImpl - Initialized Scheduler Signaller of type: class org.quartz.core.SchedulerSignalerImpl
+2025-06-22 22:28:47 [main] INFO  org.quartz.core.QuartzScheduler - Quartz Scheduler v.2.3.2 created.
+2025-06-22 22:28:47 [main] INFO  org.quartz.simpl.RAMJobStore - RAMJobStore initialized.
+2025-06-22 22:28:47 [main] INFO  org.quartz.core.QuartzScheduler - Scheduler meta-data: Quartz Scheduler (v2.3.2) 'DefaultQuartzScheduler' with instanceId 'NON_CLUSTERED'
+  Scheduler class: 'org.quartz.core.QuartzScheduler' - running locally.
+  NOT STARTED.
+  Currently in standby mode.
+  Number of jobs executed: 0
+  Using thread pool 'org.quartz.simpl.SimpleThreadPool' - with 10 threads.
+  Using job-store 'org.quartz.simpl.RAMJobStore' - which does not support persistence. and is not clustered.
+
+2025-06-22 22:28:47 [main] INFO  org.quartz.impl.StdSchedulerFactory - Quartz scheduler 'DefaultQuartzScheduler' initialized from default resource file in Quartz package: 'quartz.properties'
+2025-06-22 22:28:47 [main] INFO  org.quartz.impl.StdSchedulerFactory - Quartz scheduler version: 2.3.2
+2025-06-22 22:28:47 [main] INFO  org.quartz.core.QuartzScheduler - Scheduler DefaultQuartzScheduler_$_NON_CLUSTERED started.
+2025-06-22 22:28:47 [main] INFO  c.example.procurement.ProcurementJob - Scheduler started
+2025-06-22 22:28:47 [main] INFO  com.example.procurement.Main - Procurement scheduler started
+2025-06-22 22:29:00 [SevNTO_bot Telegram Connection] ERROR o.t.t.u.DefaultBotSession - api.telegram.org:443 failed to respond
+org.apache.http.NoHttpResponseException: api.telegram.org:443 failed to respond
+	at org.apache.http.impl.conn.DefaultHttpResponseParser.parseHead(DefaultHttpResponseParser.java:141)
+	at org.apache.http.impl.conn.DefaultHttpResponseParser.parseHead(DefaultHttpResponseParser.java:56)
+	at org.apache.http.impl.io.AbstractMessageParser.parse(AbstractMessageParser.java:259)
+	at org.apache.http.impl.DefaultBHttpClientConnection.receiveResponseHeader(DefaultBHttpClientConnection.java:163)
+	at org.apache.http.impl.conn.CPoolProxy.receiveResponseHeader(CPoolProxy.java:157)
+	at org.apache.http.protocol.HttpRequestExecutor.doReceiveResponse(HttpRequestExecutor.java:273)
+	at org.apache.http.protocol.HttpRequestExecutor.execute(HttpRequestExecutor.java:125)
+	at org.apache.http.impl.execchain.MainClientExec.execute(MainClientExec.java:272)
+	at org.apache.http.impl.execchain.ProtocolExec.execute(ProtocolExec.java:186)
+	at org.apache.http.impl.execchain.RetryExec.execute(RetryExec.java:89)
+	at org.apache.http.impl.execchain.RedirectExec.execute(RedirectExec.java:110)
+	at org.apache.http.impl.client.InternalHttpClient.doExecute(InternalHttpClient.java:185)
+	at org.apache.http.impl.client.CloseableHttpClient.execute(CloseableHttpClient.java:83)
+	at org.telegram.telegrambots.updatesreceivers.DefaultBotSession$ReaderThread.getUpdatesFromServer(DefaultBotSession.java:249)
+	at org.telegram.telegrambots.updatesreceivers.DefaultBotSession$ReaderThread.run(DefaultBotSession.java:188)
+2025-06-22 22:29:18 [main] INFO  com.example.procurement.TelegramBot - Bot commands initialized
+2025-06-22 22:29:18 [main] INFO  com.example.procurement.Main - Telegram bot registered successfully
+2025-06-22 22:29:18 [main] INFO  org.quartz.impl.StdSchedulerFactory - Using default implementation for ThreadExecutor
+2025-06-22 22:29:18 [main] INFO  org.quartz.simpl.SimpleThreadPool - Job execution threads will use class loader of thread: main
+2025-06-22 22:29:18 [main] INFO  o.quartz.core.SchedulerSignalerImpl - Initialized Scheduler Signaller of type: class org.quartz.core.SchedulerSignalerImpl
+2025-06-22 22:29:18 [main] INFO  org.quartz.core.QuartzScheduler - Quartz Scheduler v.2.3.2 created.
+2025-06-22 22:29:18 [main] INFO  org.quartz.simpl.RAMJobStore - RAMJobStore initialized.
+2025-06-22 22:29:18 [main] INFO  org.quartz.core.QuartzScheduler - Scheduler meta-data: Quartz Scheduler (v2.3.2) 'DefaultQuartzScheduler' with instanceId 'NON_CLUSTERED'
+  Scheduler class: 'org.quartz.core.QuartzScheduler' - running locally.
+  NOT STARTED.
+  Currently in standby mode.
+  Number of jobs executed: 0
+  Using thread pool 'org.quartz.simpl.SimpleThreadPool' - with 10 threads.
+  Using job-store 'org.quartz.simpl.RAMJobStore' - which does not support persistence. and is not clustered.
+
+2025-06-22 22:29:18 [main] INFO  org.quartz.impl.StdSchedulerFactory - Quartz scheduler 'DefaultQuartzScheduler' initialized from default resource file in Quartz package: 'quartz.properties'
+2025-06-22 22:29:18 [main] INFO  org.quartz.impl.StdSchedulerFactory - Quartz scheduler version: 2.3.2
+2025-06-22 22:29:18 [main] INFO  org.quartz.core.QuartzScheduler - Scheduler DefaultQuartzScheduler_$_NON_CLUSTERED started.
+2025-06-22 22:29:18 [main] INFO  c.example.procurement.ProcurementJob - Scheduler started
+2025-06-22 22:29:18 [main] INFO  com.example.procurement.Main - Procurement scheduler started
+2025-06-22 22:29:32 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.TelegramBot - Received message '/parse' from chat ID: 1152250039
+2025-06-22 22:29:32 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.TelegramBot - Received /parse command from chat ID: 1152250039
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.RssParser - Found 68 items on page 1
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.RssParser - Skipping non-real estate lot: Автопогрузчик с вилочным захватом EP, CPCD30T3, 2022 г.в. г/н 3283СА92.
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.RssParser - Skipping non-real estate lot: жилое помещение, квартира, пл. 57 кв.м., к/н 91:04:001012:5, г. Севастополь, пр-кт Победы, д.44-Б, кв. 107.
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.RssParser - Skipping non-real estate lot: Корпус Гидроцикла YAMAHA, год постройки 2019, строительный идентификационный номер USYAMA0870J819, идентификационный номер АВ0092RUS92, модель судна: Waverunner EX.
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.RssParser - Total suitable procurements found: 5
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] WARN  c.example.procurement.LotPageParser - No accessible images found for procurement: 23000051770000000483_9
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] INFO  c.example.procurement.LotPageParser - Enriched procurement: 23000051770000000483_9
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] WARN  c.example.procurement.LotPageParser - No accessible images found for procurement: 23000051770000000483_7
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] INFO  c.example.procurement.LotPageParser - Enriched procurement: 23000051770000000483_7
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] WARN  c.example.procurement.LotPageParser - No accessible images found for procurement: 23000051770000000483_5
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] INFO  c.example.procurement.LotPageParser - Enriched procurement: 23000051770000000483_5
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] WARN  c.example.procurement.LotPageParser - No accessible images found for procurement: 23000051770000000483_10
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] INFO  c.example.procurement.LotPageParser - Enriched procurement: 23000051770000000483_10
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] WARN  c.example.procurement.LotPageParser - No accessible images found for procurement: 23000051770000000483_8
+2025-06-22 22:29:33 [SevNTO_bot Telegram Executor] INFO  c.example.procurement.LotPageParser - Enriched procurement: 23000051770000000483_8
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Database tables initialized
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Found 5 new or unsent procurements
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Saved 5 procurements to database
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Database tables initialized
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Saved message mapping: procurementNumber=23000051770000000483_9, messageId=141, chatId=1152250039
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Marked procurement 23000051770000000483_9 as sent
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.TelegramBot - Sent message for procurement: 23000051770000000483_9, messageId: 141
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] WARN  com.example.procurement.TelegramBot - No images found for procurement: 23000051770000000483_9
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Database tables initialized
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Saved message mapping: procurementNumber=23000051770000000483_7, messageId=142, chatId=1152250039
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Marked procurement 23000051770000000483_7 as sent
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.TelegramBot - Sent message for procurement: 23000051770000000483_7, messageId: 142
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] WARN  com.example.procurement.TelegramBot - No images found for procurement: 23000051770000000483_7
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Database tables initialized
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Saved message mapping: procurementNumber=23000051770000000483_5, messageId=143, chatId=1152250039
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Marked procurement 23000051770000000483_5 as sent
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.TelegramBot - Sent message for procurement: 23000051770000000483_5, messageId: 143
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] WARN  com.example.procurement.TelegramBot - No images found for procurement: 23000051770000000483_5
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Database tables initialized
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Saved message mapping: procurementNumber=23000051770000000483_10, messageId=144, chatId=1152250039
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Marked procurement 23000051770000000483_10 as sent
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.TelegramBot - Sent message for procurement: 23000051770000000483_10, messageId: 144
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] WARN  com.example.procurement.TelegramBot - No images found for procurement: 23000051770000000483_10
+2025-06-22 22:29:34 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Database tables initialized
+2025-06-22 22:29:35 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Saved message mapping: procurementNumber=23000051770000000483_8, messageId=145, chatId=1152250039
+2025-06-22 22:29:35 [SevNTO_bot Telegram Executor] INFO  c.e.procurement.DatabaseManager - Marked procurement 23000051770000000483_8 as sent
+2025-06-22 22:29:35 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.TelegramBot - Sent message for procurement: 23000051770000000483_8, messageId: 145
+2025-06-22 22:29:35 [SevNTO_bot Telegram Executor] WARN  com.example.procurement.TelegramBot - No images found for procurement: 23000051770000000483_8
+2025-06-22 22:29:35 [SevNTO_bot Telegram Executor] INFO  com.example.procurement.TelegramBot - Manual parse completed, 5 procurements processed
+2025-06-22 22:30:17 [SevNTO_bot Telegram Connection] ERROR o.t.t.u.DefaultBotSession - api.telegram.org:443 failed to respond
+org.apache.http.NoHttpResponseException: api.telegram.org:443 failed to respond
+	at org.apache.http.impl.conn.DefaultHttpResponseParser.parseHead(DefaultHttpResponseParser.java:141)
+	at org.apache.http.impl.conn.DefaultHttpResponseParser.parseHead(DefaultHttpResponseParser.java:56)
+	at org.apache.http.impl.io.AbstractMessageParser.parse(AbstractMessageParser.java:259)
+	at org.apache.http.impl.DefaultBHttpClientConnection.receiveResponseHeader(DefaultBHttpClientConnection.java:163)
+	at org.apache.http.impl.conn.CPoolProxy.receiveResponseHeader(CPoolProxy.java:157)
+	at org.apache.http.protocol.HttpRequestExecutor.doReceiveResponse(HttpRequestExecutor.java:273)
+	at org.apache.http.protocol.HttpRequestExecutor.execute(HttpRequestExecutor.java:125)
+	at org.apache.http.impl.execchain.MainClientExec.execute(MainClientExec.java:272)
+	at org.apache.http.impl.execchain.ProtocolExec.execute(ProtocolExec.java:186)
+	at org.apache.http.impl.execchain.RetryExec.execute(RetryExec.java:89)
+	at org.apache.http.impl.execchain.RedirectExec.execute(RedirectExec.java:110)
+	at org.apache.http.impl.client.InternalHttpClient.doExecute(InternalHttpClient.java:185)
+	at org.apache.http.impl.client.CloseableHttpClient.execute(CloseableHttpClient.java:83)
+	at org.telegram.telegrambots.updatesreceivers.DefaultBotSession$ReaderThread.getUpdatesFromServer(DefaultBotSession.java:249)
+	at org.telegram.telegrambots.updatesreceivers.DefaultBotSession$ReaderThread.run(DefaultBotSession.java:188)
