@@ -9,7 +9,7 @@ import java.util.List;
 
 public class DatabaseManager {
     private static final Logger logger = LoggerFactory.getLogger(DatabaseManager.class);
-    private static final String DB_URL = "jdbc:sqlite:/app/data/procurements.db";
+    private static final String DB_URL = "jdbc:sqlite:data/procurements.db";
 
     public DatabaseManager() {
         initializeDatabase();

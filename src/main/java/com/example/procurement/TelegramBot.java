@@ -6,23 +6,26 @@ import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.send.SendMediaGroup;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.commands.scope.BotCommandScopeDefault;
 import org.telegram.telegrambots.meta.api.objects.media.InputMedia;
 import org.telegram.telegrambots.meta.api.objects.media.InputMediaPhoto;
+import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.io.InputStream;
+import java.net.URL;
+import java.net.HttpURLConnection;
 
 public class TelegramBot extends TelegramLongPollingBot {
     private static final Logger logger = LoggerFactory.getLogger(TelegramBot.class);
     private static final DecimalFormat DECIMAL_FORMAT = new DecimalFormat("#,##0.00");
-    private static final int MAX_RETRIES = 3;
-    private static final long RETRY_DELAY_MS = 2000;
 
     public TelegramBot() {
         initializeCommands();
@@ -112,16 +115,40 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     public void sendProcurementMessage(long chatId, Procurement procurement) {
+        // --- Выбор заголовка и подписи к цене ---
+        String lotType = "";
+        String priceLabel = "";
+        if (procurement.getBiddTypeName() != null && procurement.getBiddTypeName().toLowerCase().contains("реализация имущества должников")) {
+            lotType = "Реализация имущества должников";
+            priceLabel = "Цена за договор";
+        } else if (procurement.getContractTypeName() != null && procurement.getContractTypeName().toLowerCase().contains("купли-продажи")) {
+            lotType = "Аукцион на право заключения договора купли-продажи недвижимого имущества";
+            priceLabel = "Цена за договор";
+        } else if (procurement.getContractTypeName() != null && procurement.getContractTypeName().toLowerCase().contains("аренды")) {
+            lotType = "Аукцион на право заключения договора аренды на недвижимое имущество";
+            if (procurement.getPricePeriod() != null && procurement.getPricePeriod().contains("год")) {
+                priceLabel = "Аренда за год";
+            } else if (procurement.getPricePeriod() != null && procurement.getPricePeriod().contains("месяц")) {
+                priceLabel = "Аренда в месяц";
+            } else {
+                priceLabel = "Аренда";
+            }
+        } else {
+            lotType = "Аукцион на право заключения договора аренды на недвижимое имущество";
+            priceLabel = "Аренда";
+        }
+        // --- Формируем текст сообщения ---
         StringBuilder message = new StringBuilder();
-        String lotType = "Аукцион на право заключения договора аренды на недвижимое имущество";
-        message.append("**").append(escapeMarkdownV2(lotType)).append("**\n\n");
+        // Заголовок всегда жирным (двойное подчёркивание, как для даты)
+        String escapedLotType = "__" + escapeMarkdownV2(lotType) + "__";
+        message.append(escapedLotType).append("\n\n");
         String escapedTitle = escapeMarkdownV2(procurement.getTitle());
         message.append(escapedTitle).append("\n\n");
         if (procurement.getPrice() != null) {
             String formattedPrice = DECIMAL_FORMAT.format(procurement.getPrice()).replace(".", "\\.");
-            message.append("💰Аренда за год: ").append(formattedPrice).append(" ₽\n");
+            message.append("💰").append(priceLabel).append(": ").append(formattedPrice).append(" ₽\n");
         }
-        if (procurement.getMonthlyPrice() != null) {
+        if (procurement.getMonthlyPrice() != null && priceLabel.contains("год")) {
             String formattedMonthlyPrice = DECIMAL_FORMAT.format(procurement.getMonthlyPrice()).replace(".", "\\.");
             message.append("💰Аренда в мес: ").append(formattedMonthlyPrice).append(" ₽\n");
         }
@@ -129,47 +156,90 @@ public class TelegramBot extends TelegramLongPollingBot {
             String formattedDeposit = DECIMAL_FORMAT.format(procurement.getDeposit()).replace(".", "\\.");
             message.append("💰Задаток: ").append(formattedDeposit).append(" ₽\n");
         }
+        // --- Организатор торгов ---
+        boolean isDebtor = procurement.getBiddTypeName() != null && procurement.getBiddTypeName().toLowerCase().contains("реализация имущества должников");
+        if (!isDebtor && procurement.getDepositRecipientName() != null && !procurement.getDepositRecipientName().isEmpty()) {
+            String shortOrg = getShortOrgNameFull(procurement.getDepositRecipientName());
+            message.append("🏛Организатор торгов: ").append(escapeMarkdownV2(shortOrg)).append("\n");
+        }
+        // --- Статичный адрес ---
         message.append("🧭г Севастополь\n");
         if (procurement.getContractTerm() != null) {
             String escapedContractTerm = escapeMarkdownV2(procurement.getContractTerm());
             message.append("📅Срок договора (лет): ").append(escapedContractTerm).append("\n");
         }
         if (procurement.getDeadline() != null) {
-            String escapedDeadline = escapeMarkdownV2(procurement.getDeadline());
+            String formattedDeadline = procurement.getDeadline();
+            try {
+                java.time.OffsetDateTime odt = java.time.OffsetDateTime.parse(procurement.getDeadline());
+                formattedDeadline = odt.format(java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy"));
+            } catch (Exception ignore) {}
+            String escapedDeadline = escapeMarkdownV2(formattedDeadline);
             message.append("⏰Подача до: __").append(escapedDeadline).append("__\n\n");
         }
         message.append("Заинтересовал лот? [Пиши](https://t.me/").append(getBotUsername()).append("?start=lot_").append(procurement.getNumber()).append(") или звони 88007078692");
-
-        SendMessage sendMessage = new SendMessage();
-        sendMessage.setChatId(chatId);
-        sendMessage.setText(message.toString());
-        sendMessage.setParseMode("MarkdownV2");
-
-        Integer messageId = executeWithRetry(sendMessage);
-        if (messageId != null) {
-            DatabaseManager db = new DatabaseManager();
-            db.saveMessageId(procurement.getNumber(), messageId, chatId);
-            db.markAsSent(procurement.getNumber());
-            logger.info("Sent message for procurement: {}, messageId: {}", procurement.getNumber(), messageId);
-
-            if (procurement.getImageUrls() != null && !procurement.getImageUrls().isEmpty()) {
-                List<InputMedia> media = new ArrayList<>();
-                for (String url : procurement.getImageUrls()) {
-                    InputMediaPhoto photo = new InputMediaPhoto();
-                    photo.setMedia(url);
-                    media.add(photo);
-                    logger.debug("Preparing to send image: {}", url);
+        // --- Отправка фото и текста как медиа-группа ---
+        if (procurement.getImageUrls() != null && !procurement.getImageUrls().isEmpty()) {
+            int maxImages = Math.min(4, procurement.getImageUrls().size());
+            List<String> urls = procurement.getImageUrls().subList(0, maxImages);
+            try {
+                if (urls.size() == 1) {
+                    String url = urls.get(0);
+                    logger.info("IMAGE_URL for procurement {}: {} (downloading)", procurement.getNumber(), url);
+                    InputStream in = downloadImage(url);
+                    if (in != null) {
+                        InputFile inputFile = new InputFile(in, "image.jpg");
+                        SendPhoto photo = new SendPhoto();
+                        photo.setChatId(chatId);
+                        photo.setPhoto(inputFile);
+                        photo.setCaption(message.toString());
+                        photo.setParseMode("MarkdownV2");
+                        executeWithRetry(photo);
+                        in.close();
+                        logger.info("Sent 1 image for procurement: {} (downloaded)", procurement.getNumber());
+                    } else {
+                        logger.warn("Failed to download image for procurement: {}", procurement.getNumber());
+                        sendTextFallback(chatId, message.toString(), procurement.getNumber());
+                    }
+                } else {
+                    List<InputMedia> media = new ArrayList<>();
+                    List<InputStream> streams = new ArrayList<>();
+                    for (int i = 0; i < urls.size(); i++) {
+                        String url = urls.get(i);
+                        logger.info("IMAGE_URL for procurement {}: {} (downloading)", procurement.getNumber(), url);
+                        InputStream in = downloadImage(url);
+                        if (in != null) {
+                            InputMediaPhoto photo = new InputMediaPhoto();
+                            photo.setMedia(in, "image" + i + ".jpg");
+                            if (i == 0) {
+                                photo.setCaption(message.toString());
+                                photo.setParseMode("MarkdownV2");
+                            }
+                            media.add(photo);
+                            streams.add(in);
+                        } else {
+                            logger.warn("Failed to download image {} for procurement: {}", i, procurement.getNumber());
+                        }
+                    }
+                    if (!media.isEmpty()) {
+                        SendMediaGroup mediaGroup = new SendMediaGroup();
+                        mediaGroup.setChatId(chatId);
+                        mediaGroup.setMedias(media);
+                        executeWithRetry(mediaGroup);
+                        logger.info("Sent {} images for procurement: {} (downloaded)", media.size(), procurement.getNumber());
+                    } else {
+                        logger.warn("No images could be downloaded for procurement: {}", procurement.getNumber());
+                        sendTextFallback(chatId, message.toString(), procurement.getNumber());
+                    }
+                    // Закрываем все потоки
+                    for (InputStream s : streams) try { s.close(); } catch (Exception ignore) {}
                 }
-                SendMediaGroup mediaGroup = new SendMediaGroup();
-                mediaGroup.setChatId(chatId);
-                mediaGroup.setMedias(media);
-                executeWithRetry(mediaGroup);
-                logger.info("Sent {} images for procurement: {}", media.size(), procurement.getNumber());
-            } else {
-                logger.warn("No images found for procurement: {}", procurement.getNumber());
+            } catch (Exception e) {
+                logger.error("Failed to download/send images for procurement {}: {}", procurement.getNumber(), e.getMessage());
+                sendTextFallback(chatId, message.toString(), procurement.getNumber());
             }
         } else {
-            logger.error("Failed to send message for procurement: {}", procurement.getNumber());
+            sendTextFallback(chatId, message.toString(), procurement.getNumber());
         }
     }
 
@@ -216,30 +286,17 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private Integer executeWithRetry(Object method) {
-        int attempt = 0;
-        while (attempt < MAX_RETRIES) {
-            try {
-                if (method instanceof SendMessage) {
-                    return execute((SendMessage) method).getMessageId();
-                } else if (method instanceof SendMediaGroup) {
-                    execute((SendMediaGroup) method);
-                    return null;
-                }
-            } catch (TelegramApiException e) {
-                attempt++;
-                if (attempt == MAX_RETRIES) {
-                    logger.error("Failed to execute method after {} attempts: {}", MAX_RETRIES, e.getMessage());
-                    return null;
-                }
-                try {
-                    Thread.sleep(RETRY_DELAY_MS);
-                } catch (InterruptedException ie) {
-                    logger.error("Retry interrupted: {}", ie.getMessage());
-                    Thread.currentThread().interrupt();
-                    return null;
-                }
-                logger.warn("Retrying method execution, attempt {}/{}", attempt + 1, MAX_RETRIES);
+        try {
+            if (method instanceof SendMessage) {
+                return execute((SendMessage) method).getMessageId();
+            } else if (method instanceof SendMediaGroup) {
+                execute((SendMediaGroup) method);
+                return null;
+            } else if (method instanceof SendPhoto) {
+                return execute((SendPhoto) method).getMessageId();
             }
+        } catch (TelegramApiException e) {
+            logger.error("Failed to execute method: {}", e.getMessage());
         }
         return null;
     }
@@ -264,5 +321,88 @@ public class TelegramBot extends TelegramLongPollingBot {
                 .replace("}", "\\}")
                 .replace(".", "\\.")
                 .replace("!", "\\!");
+    }
+
+    // Сокращение названия организатора по первым буквам каждого слова (кроме служебных)
+    private String getShortOrgName(String fullName) {
+        String[] serviceWords = {"по", "и", "в", "на", "с", "к", "от", "до", "за", "из", "у", "о", "об", "а", "но", "для", "при", "без", "над", "под", "про", "через", "после", "между", "надо", "через", "либо", "или", "то", "же", "бы", "же", "да", "ли", "быть", "этот", "тот", "такой", "так", "же", "как", "что", "чтобы", "который", "свой", "наш", "ваш", "их", "её", "его", "её", "их"};
+        java.util.Set<String> serviceSet = new java.util.HashSet<>();
+        for (String w : serviceWords) serviceSet.add(w.toLowerCase());
+        StringBuilder sb = new StringBuilder();
+        String[] words = fullName.replaceAll("[\"«»]", "").split("[\s,]+");
+        for (String word : words) {
+            if (word.isEmpty()) continue;
+            String lower = word.toLowerCase();
+            if (serviceSet.contains(lower)) continue;
+            if (word.length() > 0 && Character.isLetter(word.charAt(0))) {
+                sb.append(Character.toUpperCase(word.charAt(0)));
+            }
+        }
+        // Спец. случаи для ГУП, МУП, ГКУ, ДИЗО и т.д.
+        if (fullName.toUpperCase().contains("ГУП")) return "ГУП \"" + sb.toString() + "\"";
+        if (fullName.toUpperCase().contains("МУП")) return "МУП \"" + sb.toString() + "\"";
+        if (fullName.toUpperCase().contains("ГКУ")) return "ГКУ \"" + sb.toString() + "\"";
+        if (fullName.toUpperCase().contains("ДЕПАРТАМЕНТ")) return sb.toString();
+        return sb.toString();
+    }
+
+    // Новый метод для сокращения с кавычками и пробелом
+    private String getShortOrgNameFull(String fullName) {
+        String upper = fullName.toUpperCase();
+        if (upper.contains("ГУП")) {
+            String core = extractCoreName(fullName);
+            return "ГУП \"" + core + "\"";
+        }
+        if (upper.contains("МУП")) {
+            String core = extractCoreName(fullName);
+            return "МУП \"" + core + "\"";
+        }
+        if (upper.contains("ГКУ")) {
+            String core = extractCoreName(fullName);
+            return "ГКУ \"" + core + "\"";
+        }
+        if (upper.contains("ДИЗО")) {
+            String core = extractCoreName(fullName);
+            return "ДИЗО \"" + core + "\"";
+        }
+        // Если не спец. случай — просто сокращаем по первым буквам, но без кавычек
+        return getShortOrgName(fullName);
+    }
+
+    // Вспомогательный метод для извлечения "ядра" названия
+    private String extractCoreName(String fullName) {
+        String[] words = fullName.replaceAll("[\"«»]", "").split("[\s,]+");
+        StringBuilder sb = new StringBuilder();
+        for (String word : words) {
+            if (word.isEmpty()) continue;
+            if (word.length() > 0 && Character.isLetter(word.charAt(0)) && word.equals(word.toUpperCase())) {
+                sb.append(word);
+                break;
+            }
+        }
+        return sb.length() > 0 ? sb.toString() : fullName;
+    }
+
+    private InputStream downloadImage(String imageUrl) {
+        try {
+            URL url = new URL(imageUrl);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
+            return conn.getInputStream();
+        } catch (Exception e) {
+            logger.warn("Failed to download image from {}: {}", imageUrl, e.getMessage());
+            return null;
+        }
+    }
+
+    private void sendTextFallback(long chatId, String text, String procurementNumber) {
+        SendMessage sendMessage = new SendMessage();
+        sendMessage.setChatId(chatId);
+        sendMessage.setText(text);
+        sendMessage.setParseMode("MarkdownV2");
+        executeWithRetry(sendMessage);
+        logger.warn("Fallback: sent only text for procurement: {}", procurementNumber);
     }
 }

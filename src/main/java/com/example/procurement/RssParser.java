@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
 
 public class RssParser {
     private static final Logger logger = LoggerFactory.getLogger(RssParser.class);
-    private static final String RSS_URL = "https://torgi.gov.ru/new/api/public/lotcards/rss?dynSubjRF=80&lotStatus=PUBLISHED,APPLICATIONS_SUBMISSION&byFirstVersion=true&size=100";
+    private static final String RSS_URL = "https://torgi.gov.ru/new/api/public/lotcards/rss?dynSubjRF=80&lotStatus=PUBLISHED,APPLICATIONS_SUBMISSION&byFirstVersion=true";
     private static final Pattern NUMBER_PATTERN = Pattern.compile("lot/([\\d:_]+)");
     private static final Pattern CADASTRAL_PATTERN = Pattern.compile("(\\d{2}:\\d{2}:\\d{6,7}:\\d+)");
     private static final Pattern AREA_PATTERN = Pattern.compile("площадью\\s*([\\d,.]+)\\s*кв\\.?\\s*м");
@@ -25,101 +25,130 @@ public class RssParser {
 
     public List<Procurement> parseUntilEnough(int maxCount) {
         List<Procurement> procurements = new ArrayList<>();
-        int page = 1;
+        java.util.Set<String> seenNumbers = new java.util.HashSet<>();
+        try {
+            URL url = new URL(RSS_URL + "&page=1");
+            SyndFeedInput input = new SyndFeedInput();
+            SyndFeed feed = input.build(new XmlReader(url));
+            List<SyndEntry> entries = feed.getEntries();
+            logger.info("Found {} items on page 1", entries.size());
 
-        while (procurements.size() < maxCount) {
-            try {
-                URL url = new URL(RSS_URL + "&page=" + page);
-                SyndFeedInput input = new SyndFeedInput();
-                SyndFeed feed = input.build(new XmlReader(url));
-                List<SyndEntry> entries = feed.getEntries();
-                logger.info("Found {} items on page {}", entries.size(), page);
-
-                if (entries.isEmpty()) {
+            for (SyndEntry entry : entries) {
+                String title = entry.getTitle();
+                logger.info("RSS lot: {}", title);
+                if (procurements.size() >= maxCount) {
                     break;
                 }
 
-                for (SyndEntry entry : entries) {
-                    if (procurements.size() >= maxCount) {
-                        break;
+                String link = entry.getLink();
+                String description = entry.getDescription().getValue();
+                String number = extractNumberFromLink(link);
+
+                if (!isRealEstateLot(title)) {
+                    if (Config.getParserVerbose()) {
+                        logger.debug("Skipping non-real estate lot: {}", title);
                     }
-
-                    String title = entry.getTitle();
-                    String link = entry.getLink();
-                    String description = entry.getDescription().getValue();
-                    String number = extractNumberFromLink(link);
-
-                    if (!isRealEstateLot(title)) {
-                        logger.info("Skipping non-real estate lot: {}", title);
-                        continue;
-                    }
-
-                    if (number == null) {
-                        logger.warn("No valid number found in link: {}", link);
-                        logger.warn("Skipping procurement with null number: {}", title);
-                        continue;
-                    }
-
-                    Procurement procurement = new Procurement();
-                    procurement.setNumber(number);
-                    procurement.setTitle(title);
-                    procurement.setLink(link);
-                    procurement.setLotType(extractLotType(title));
-                    procurement.setAddress(extractAddress(title));
-                    procurement.setPrice(extractPrice(description));
-                    procurement.setMonthlyPrice(extractMonthlyPrice(title));
-                    procurement.setDeposit(extractDeposit(title));
-                    procurement.setContractTerm(extractContractTerm(title));
-                    procurement.setDeadline(extractDeadline(entry.getPublishedDate()));
-                    procurement.setCadastralNumber(extractCadastralNumber(title));
-                    procurement.setArea(extractArea(title));
-                    procurement.setImageUrls(new ArrayList<>());
-                    procurements.add(procurement);
+                    continue;
                 }
-                page++;
-            } catch (Exception e) {
-                logger.error("Error parsing RSS feed on page {}: {}", page, e.getMessage());
-                break;
-            }
-        }
 
+                if (number == null) {
+                    if (Config.getParserVerbose()) {
+                        logger.debug("No valid number found in link: {}", link);
+                        logger.debug("Skipping procurement with null number: {}", title);
+                    }
+                    continue;
+                }
+
+                // Пропуск дубликатов
+                if (seenNumbers.contains(number)) {
+                    continue;
+                }
+                seenNumbers.add(number);
+
+                Procurement procurement = new Procurement();
+                procurement.setNumber(number);
+                procurement.setTitle(title);
+                procurement.setLink(link);
+                procurement.setLotType(extractLotType(title));
+                procurement.setAddress(extractAddress(title));
+                procurement.setPrice(extractPrice(description));
+                procurement.setMonthlyPrice(extractMonthlyPrice(title));
+                procurement.setDeposit(extractDeposit(title));
+                procurement.setContractTerm(extractContractTerm(title));
+                procurement.setDeadline(extractDeadline(entry.getPublishedDate()));
+                procurement.setCadastralNumber(extractCadastralNumber(title));
+                procurement.setArea(extractArea(title));
+                procurement.setImageUrls(new ArrayList<>());
+                procurements.add(procurement);
+
+                // Задержка между запросами для снижения нагрузки на сайт
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Error parsing RSS feed: {}", e.getMessage());
+        }
         logger.info("Total suitable procurements found: {}", procurements.size());
         return procurements;
     }
 
     private boolean isRealEstateLot(String title) {
         String titleLower = title.toLowerCase();
-        if (titleLower.contains("автомобиль") ||
-                titleLower.contains("мотоцикл") ||
-                titleLower.contains("судно") ||
-                titleLower.contains("трактор") ||
-                titleLower.contains("лом ") ||
-                titleLower.contains("шин") ||
-                titleLower.contains("гидротехни") ||
-                titleLower.contains("земельный участок") ||
-                titleLower.contains("квартира") ||
-                titleLower.contains("жилое помещение") ||
-                titleLower.contains("имущественный комплекс")) {
-            return false;
+        // Хардкодированные слова для фильтрации
+        String[] exclude = {"автомобиль", "камаз", "маз", "трактор", "погрузчик", "лом", "судно", "гидроцикл"};
+        for (String bad : exclude) {
+            if (titleLower.contains(bad)) {
+                logger.info("FILTER: EXCLUDE ('{}') -> {}", bad, title);
+                return false;
+            }
         }
-        return titleLower.contains("нежилое помещение") ||
-                titleLower.contains("нежилые помещения") ||
-                titleLower.contains("нежилое здание");
+        String[] include = {"нежилое", "помещение", "нежилые", "помещения", "здание", "жилое", "квартира", "земельный", "участок", "имущественный", "комплекс"};
+        for (String good : include) {
+            if (titleLower.contains(good)) {
+                logger.info("FILTER: INCLUDE ('{}') -> {}", good, title);
+                return true;
+            }
+        }
+        logger.info("FILTER: NO MATCH -> {}", title);
+        // Отправить id лота в чат, если возможно
+        try {
+            String chatId = Config.getChatId();
+            if (chatId != null && !chatId.isEmpty()) {
+                String lotId = extractNumberFromLink(title); // или другой способ получить id
+                if (lotId != null) {
+                    new TelegramBot().sendMessageWithRetry(Long.parseLong(chatId), "NO MATCH: " + lotId);
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to send NO MATCH lot id to chat: {}", e.getMessage());
+        }
+        return false;
     }
 
     private String extractNumberFromLink(String link) {
         if (link == null) {
-            logger.warn("Link is null");
+            if (Config.getParserVerbose()) {
+                logger.debug("Link is null");
+            }
             return null;
         }
-        logger.debug("Extracting number from link: {}", link);
+        if (Config.getParserVerbose()) {
+            logger.debug("Extracting number from link: {}", link);
+        }
         Matcher matcher = NUMBER_PATTERN.matcher(link);
         if (matcher.find()) {
             String number = matcher.group(1);
-            logger.debug("Extracted number: {}", number);
+            if (Config.getParserVerbose()) {
+                logger.debug("Extracted number: {}", number);
+            }
             return number;
         }
-        logger.warn("No number found in link: {}", link);
+        if (Config.getParserVerbose()) {
+            logger.debug("No number found in link: {}", link);
+        }
         return null;
     }
 

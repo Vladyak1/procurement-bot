@@ -23,4 +23,8 @@ public class Procurement {
     private String deadline; // Дата окончания подачи заявок
     private String lotType; // Тип лота: "Реализация имущества должников", "Аукцион на право заключения договора аренды" и т.д.
     private List<String> imageUrls; // Ссылки на изображения
+    private String biddTypeName; // Тип торгов (например, реализация имущества должников)
+    private String contractTypeName; // Тип договора (купли-продажи, аренды)
+    private String pricePeriod; // Период для цены (год/месяц)
+    private String depositRecipientName; // Организатор торгов
 }
