@@ -1,0 +1,8 @@
+com\example\procurement\TelegramBot.class
+com\example\procurement\Main.class
+com\example\procurement\Procurement.class
+com\example\procurement\RssParser.class
+com\example\procurement\LotPageParser.class
+com\example\procurement\ProcurementJob.class
+com\example\procurement\DatabaseManager.class
+com\example\procurement\Config.class
