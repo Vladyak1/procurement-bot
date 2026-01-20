@@ -7,26 +7,39 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
-import java.net.URL;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 
 @Slf4j
 public class LotPageParser {
 
-    public void enrichProcurement(Procurement procurement) {
+    /**
+     * Обогащает закупку данными из XHR API
+     */
+    public void enrichProcurement(Procurement procurement, String xhrBaseUrl) {
         if (procurement.getNumber() == null) {
             log.warn("Skipping enrichment for procurement with null number: {}", procurement.getTitle());
             return;
         }
         try {
-            String urlStr = Config.getXhrUrl() + procurement.getNumber();
-            URL url = new URL(urlStr);
+            String urlStr = xhrBaseUrl + procurement.getNumber();
+            java.net.URL url = URI.create(urlStr).toURL();
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(10000);
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+
+            // Полноценные браузерные заголовки для обхода анти-бот защиты
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+            conn.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
+            conn.setRequestProperty("Referer", "https://torgi.gov.ru/");
+            conn.setRequestProperty("Connection", "keep-alive");
+            conn.setRequestProperty("Sec-Fetch-Dest", "empty");
+            conn.setRequestProperty("Sec-Fetch-Mode", "cors");
+            conn.setRequestProperty("Sec-Fetch-Site", "same-origin");
+
             int responseCode = conn.getResponseCode();
             if (responseCode != 200) {
                 log.warn("XHR API returned non-200 for {}: {}", procurement.getNumber(), responseCode);
@@ -82,8 +95,13 @@ public class LotPageParser {
                 }
             }
             procurement.setImageUrls(imageUrls);
-            log.info("Enriched procurement from XHR JSON: {} ({} images)", procurement.getNumber(), imageUrls.size());
-            log.info("lotImages: {}", images);
+            if (imageUrls.isEmpty()) {
+                log.warn("No images found for lot {}: lotImages field is {}",
+                    procurement.getNumber(),
+                    images.isMissingNode() ? "missing" : (images.isArray() ? "empty array" : "not an array"));
+            } else {
+                log.info("Enriched procurement from XHR JSON: {} ({} images)", procurement.getNumber(), imageUrls.size());
+            }
             log.info("title: {}", procurement.getTitle());
             log.info("address: {}", procurement.getAddress());
             log.info("price: {}", procurement.getPrice());
@@ -121,26 +139,35 @@ public class LotPageParser {
             // Вычисляем месячную/годовую цену аренды
             if (contractTypeName != null && contractTypeName.contains("аренды")) {
                 if (pricePeriod != null && pricePeriod.contains("год")) {
-                    // Цена за год, считаем за месяц
                     if (procurement.getPrice() != null) {
                         procurement.setMonthlyPrice(procurement.getPrice() / 12.0);
                     }
                 } else if (pricePeriod != null && pricePeriod.contains("месяц")) {
-                    // Цена за месяц, считаем за год
                     if (procurement.getPrice() != null) {
                         procurement.setMonthlyPrice(procurement.getPrice());
                         procurement.setPrice(procurement.getPrice() * 12.0);
                     }
                 }
             }
-            // Пауза между запросами к XHR API
             try {
                 Thread.sleep(400);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+        } catch (java.net.SocketTimeoutException e) {
+            log.error("Timeout while enriching procurement {}: {} (API took >10 seconds)", procurement.getNumber(), e.getMessage());
+        } catch (java.io.IOException e) {
+            log.error("Network error while enriching procurement {}: {}", procurement.getNumber(), e.getMessage());
         } catch (Exception e) {
-            log.error("Error enriching procurement {}: {}", procurement.getNumber(), e.getMessage());
+            log.error("Error enriching procurement {}: {}", procurement.getNumber(), e.getMessage(), e);
         }
+    }
+    
+    /**
+     * Обогащает закупку данными из XHR API (использует URL из конфига)
+     * Для обратной совместимости
+     */
+    public void enrichProcurement(Procurement procurement) {
+        enrichProcurement(procurement, Config.getXhrUrl());
     }
 }

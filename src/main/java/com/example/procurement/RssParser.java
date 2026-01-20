@@ -6,7 +6,9 @@ import com.rometools.rome.io.SyndFeedInput;
 import com.rometools.rome.io.XmlReader;
 import lombok.extern.slf4j.Slf4j;
 
-import java.net.URL;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -22,69 +24,117 @@ public class RssParser {
     private static final Pattern AREA_PATTERN = Pattern.compile("площадью\\s*([\\d,.]+)\\s*кв\\.?\\s*м");
     private static final Pattern PRICE_PATTERN = Pattern.compile("Начальная цена:\\s*([\\d.]+)");
 
-    public List<Procurement> parseUntilEnough(int maxCount, boolean notifyAdminOnNoMatch) {
+    private final ParsingSource source;
+    private final LotFilter lotFilter;
+
+    public RssParser(ParsingSource source) {
+        this.source = source;
+        this.lotFilter = LotFilter.createDefault();
+    }
+
+    public List<Procurement> parseUntilEnough(final int maxCount, final boolean notifyAdminOnNoMatch) {
         List<Procurement> procurements = new ArrayList<>();
         Set<String> seenNumbers = new java.util.HashSet<>();
+        log.info("Starting RSS parsing from URL: {}", source.getRssUrl());
+        log.info("Max count requested: {}, notify on no match: {}", maxCount, notifyAdminOnNoMatch);
+
         try {
-            URL url = new URL(Config.getRssUrl());
+            java.net.URL url = URI.create(source.getRssUrl()).toURL();
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(30000);
+            conn.setReadTimeout(30000);
+
+            // Полноценные браузерные заголовки для обхода анти-бот защиты
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            conn.setRequestProperty("Accept", "application/rss+xml, application/xml, text/xml, */*");
+            conn.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
+            conn.setRequestProperty("Referer", "https://torgi.gov.ru/");
+            conn.setRequestProperty("Connection", "keep-alive");
+
+            int responseCode = conn.getResponseCode();
+            if (responseCode != 200) {
+                log.error("RSS feed returned HTTP {}: {}", responseCode, source.getRssUrl());
+                throw new RuntimeException("RSS feed returned HTTP " + responseCode);
+            }
+
             SyndFeedInput input = new SyndFeedInput();
-            SyndFeed feed = input.build(new XmlReader(url));
+            SyndFeed feed;
+            try (InputStream is = conn.getInputStream(); XmlReader xr = new XmlReader(is)) {
+                feed = input.build(xr);
+            }
             List<SyndEntry> entries = feed.getEntries();
             log.info("Found {} items in RSS feed", entries.size());
 
+            int processedCount = 0;
+            int filteredOutCount = 0;
+            int nullNumberCount = 0;
+            int duplicateCount = 0;
+
             for (SyndEntry entry : entries) {
+                processedCount++;
                 String title = entry.getTitle();
-                log.info("Processing RSS lot: {}", title);
+                String link = entry.getLink();
+                log.info("Processing RSS lot #{}: {}", processedCount, title);
+                log.debug("Link: {}", link);
+
                 if (procurements.size() >= maxCount) {
+                    log.info("Reached max count of {}, stopping", maxCount);
                     break;
                 }
 
-                String link = entry.getLink();
-                String description = entry.getDescription().getValue();
+                String description = entry.getDescription() != null ? entry.getDescription().getValue() : "";
                 String number = extractNumberFromLink(link);
 
                 boolean isSuitable = isRealEstateLot(title, notifyAdminOnNoMatch);
                 if (!isSuitable) {
-                    log.info("Lot {} discarded by filter", title);
+                    filteredOutCount++;
+                    log.info("Lot #{} discarded by filter: {}", processedCount, title);
                     continue;
                 }
 
                 if (number == null) {
-                    if (Config.getParserVerbose()) {
-                        log.debug("No valid number found in link: {}", link);
-                        log.debug("Skipping procurement with null number: {}", title);
-                    }
+                    nullNumberCount++;
+                    log.warn("No valid number found in link for lot #{}: {}", processedCount, link);
+                    log.warn("Skipping procurement with null number: {}", title);
                     continue;
                 }
 
                 if (seenNumbers.contains(number)) {
-                    log.debug("Duplicate number {} skipped", number);
+                    duplicateCount++;
+                    log.debug("Duplicate number {} skipped for lot #{}", number, processedCount);
                     continue;
                 }
                 seenNumbers.add(number);
 
-                Procurement procurement = new Procurement();
-                procurement.setNumber(number);
-                procurement.setTitle(title);
-                procurement.setLink(link);
-                procurement.setLotType(extractLotType(title));
-                procurement.setAddress(extractAddress(title));
-                procurement.setPrice(extractPrice(description));
-                procurement.setMonthlyPrice(extractMonthlyPrice(title));
-                procurement.setDeposit(extractDeposit(title));
-                procurement.setContractTerm(extractContractTerm(title));
-                procurement.setDeadline(extractDeadline(entry.getPublishedDate()));
-                procurement.setCadastralNumber(extractCadastralNumber(title));
-                procurement.setArea(extractArea(title));
-                procurement.setImageUrls(new ArrayList<>());
+                Procurement procurement = Procurement.builder()
+                        .number(number)
+                        .title(title)
+                        .link(link)
+                        .lotType(extractLotType(title))
+                        .address(extractAddress(title))
+                        .price(extractPrice(description))
+                        .monthlyPrice(extractMonthlyPrice(title))
+                        .deposit(extractDeposit(title))
+                        .contractTerm(extractContractTerm(title))
+                        .deadline(extractDeadline(entry.getPublishedDate()))
+                        .cadastralNumber(extractCadastralNumber(title))
+                        .area(extractArea(title))
+                        .imageUrls(new ArrayList<>())
+                        .source(source.getName())
+                        .build();
                 procurements.add(procurement);
-                log.info("Added suitable procurement: {}", title);
+                log.info("✓ Added suitable procurement #{}: {}", procurements.size(), title);
+
                 if (procurements.size() >= maxCount) {
                     break;
                 }
             }
+
+            log.info("RSS parsing summary: processed={}, filtered_out={}, null_number={}, duplicates={}, added={}",
+                    processedCount, filteredOutCount, nullNumberCount, duplicateCount, procurements.size());
         } catch (Exception e) {
-            log.error("Error parsing RSS feed: {}", e.getMessage());
+            log.error("Error parsing RSS feed from {}: {}", source.getRssUrl(), e.getMessage(), e);
         }
         log.info("Total suitable procurements found: {}", procurements.size());
         return procurements;
@@ -96,48 +146,18 @@ public class RssParser {
     }
 
     private boolean isRealEstateLot(String title, boolean notifyAdminOnNoMatch) {
-        String titleLower = title.toLowerCase();
-        String[] exclude = {"автомобиль", "камаз", "маз", "трактор", "погрузчик", "лом", "судно", "гидроцикл"};
-        for (String bad : exclude) {
-            if (titleLower.contains(bad)) {
-                log.debug("Excluded by '{}': {}", bad, title);
-                return false;
+        // Извлекаем lotId для уведомления
+        String lotId = null;
+        String lotUrl = null;
+        if (title.contains("http")) {
+            lotId = extractNumberFromLink(title);
+            if (lotId != null) {
+                lotUrl = "https://torgi.gov.ru/new/public/lots/lot/" + lotId + "/(lotInfo:info)?fromRec=false";
             }
         }
-        String[] include = {"нежилое", "помещение", "нежилые", "помещения", "здание", "жилое", "квартира", "земельный", "участок", "имущественный", "комплекс", "недвижимого", "недвижимое"};
-        for (String good : include) {
-            if (titleLower.contains(good)) {
-                log.debug("Included by '{}': {}", good, title);
-                return true;
-            }
-        }
-        log.debug("No match for include/exclude in: {}", title);
-        if (notifyAdminOnNoMatch) {
-            try {
-                String lotId = null;
-                if (title.contains("http")) {
-                    lotId = extractNumberFromLink(title);
-                }
-                String lotKey = lotId != null ? lotId : Integer.toString(title.hashCode());
-                DatabaseManager db = AppContext.getDatabaseManager();
-                if (db.isNoMatchSent(lotKey)) {
-                    log.info("NO MATCH lot {} уже отправлялся, пропускаем отправку", lotKey);
-                    return false;
-                }
-                String msg = "❓ Не удалось определить пригодность лота\n";
-                if (lotId != null) {
-                    msg += "ID: " + lotId + "\nСсылка: https://torgi.gov.ru/new/public/lots/lot/" + lotId + "/(lotInfo:info)?fromRec=false";
-                } else {
-                    msg += "Текст: " + title;
-                }
-                log.info("NO MATCH: отправка сообщения в админ-группу: {}", msg);
-                new TelegramBot().sendMessageWithRetry(Config.getAdminGroupId(), msg);
-                db.markNoMatchSent(lotKey);
-            } catch (Exception e) {
-                log.warn("Failed to send NO MATCH lot id to admin group: {}", e.getMessage());
-            }
-        }
-        return false;
+        
+        // Используем общий фильтр
+        return lotFilter.isRealEstateLot(title, null, notifyAdminOnNoMatch, lotId, lotUrl);
     }
 
     private String extractNumberFromLink(String link) {
@@ -179,9 +199,7 @@ public class RssParser {
         if (matcher.find()) {
             try {
                 String areaText = matcher.group(1).replace(",", ".");
-                Double area = Double.parseDouble(areaText);
-                log.debug("Extracted area: {}", area);
-                return area;
+                return Double.parseDouble(areaText);
             } catch (NumberFormatException e) {
                 log.warn("Failed to parse area: {}", matcher.group(1));
             }
@@ -193,9 +211,7 @@ public class RssParser {
         Matcher matcher = PRICE_PATTERN.matcher(description);
         if (matcher.find()) {
             try {
-                Double price = Double.parseDouble(matcher.group(1));
-                log.debug("Extracted price: {}", price);
-                return price;
+                return Double.parseDouble(matcher.group(1));
             } catch (NumberFormatException e) {
                 log.warn("Failed to parse price: {}", matcher.group(1));
             }
@@ -219,9 +235,7 @@ public class RssParser {
         Pattern pattern = Pattern.compile("по адресу:([^,]+)");
         Matcher matcher = pattern.matcher(title);
         if (matcher.find()) {
-            String address = matcher.group(1).trim();
-            log.debug("Extracted address: {}", address);
-            return address;
+            return matcher.group(1).trim();
         }
         return "г. Севастополь";
     }
@@ -240,7 +254,7 @@ public class RssParser {
     }
 
     private Double extractDeposit(String title) {
-        Pattern depositPattern = Pattern.compile("залог\\s*(\\d+[,.]\\d+)");
+        Pattern depositPattern = Pattern.compile("залог\\s*(\\д+[,.]\\d+)");
         Matcher matcher = depositPattern.matcher(title);
         if (matcher.find()) {
             try {
@@ -264,8 +278,7 @@ public class RssParser {
     private String extractDeadline(Date publishedDate) {
         if (publishedDate != null) {
             try {
-                SimpleDateFormat formatter = new SimpleDateFormat("dd-MM-yyyy");
-                return formatter.format(publishedDate);
+                return new SimpleDateFormat("dd-MM-yyyy").format(publishedDate);
             } catch (Exception e) {
                 log.warn("Failed to format deadline: {}", publishedDate);
             }
