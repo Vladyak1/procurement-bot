@@ -1,0 +1,64 @@
+# Environment variables - NEVER commit these!
+.env
+*.env
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# Database
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Cache
+cache/
+
+# Backups
+backups/
+backups_local/
+*.tar.gz
+*.zip
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# VS Code
+.vscode/
+
+# OS specific
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Application properties with sensitive data
+# Keep the template but ignore copies with real tokens
+application.properties.backup
+application-prod.properties
+application-local.properties

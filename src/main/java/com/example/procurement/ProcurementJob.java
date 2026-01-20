@@ -9,32 +9,40 @@ import java.util.List;
 
 @NoArgsConstructor
 @Slf4j
+@DisallowConcurrentExecution
 public class ProcurementJob implements Job {
 
     @Override
     public void execute(JobExecutionContext context) {
-        log.info("Starting procurement parsing job");
-        TelegramBot bot = new TelegramBot();
-        DatabaseManager db = AppContext.getDatabaseManager();
-        ParserService parserService = AppContext.getParserService();
-
-        List<Procurement> procurements = parserService.parseAndEnrich(Integer.MAX_VALUE, false);
-
-        List<Procurement> newProcurements = db.getNewProcurements(procurements);
-        db.saveProcurements(newProcurements);
+        log.info("Starting procurement parsing job (all sources)");
+        
+        ProcurementProcessingService processingService = AppContext.getProcessingService();
+        if (processingService == null) {
+            log.error("ProcurementProcessingService not initialized in AppContext; skipping job execution");
+            return;
+        }
 
         long chatId = Config.getParseGroupId(); // Публикация в группу парсинга
-        for (Procurement p : newProcurements) {
-            bot.sendProcurementMessage(chatId, p);
-            db.markAsSent(p.getNumber());
-        }
-        log.info("Job completed, processed {} procurements", newProcurements.size());
+        // Парсим все источники: Torgi.gov.ru + Сбербанк-АСТ
+        int published = processingService.parseAndPublishAllSources(Integer.MAX_VALUE, chatId, false);
+        
+        log.info("Job completed, published {} procurements from all sources", published);
     }
+
+    private static Scheduler scheduler;
 
     public static void scheduleJob() {
         try {
-            Scheduler scheduler = StdSchedulerFactory.getDefaultScheduler();
+            log.info("Initializing procurement scheduler...");
+            // Создаем планировщик с настройками для корректного завершения
+            org.quartz.SchedulerFactory schedulerFactory = new StdSchedulerFactory();
+            scheduler = schedulerFactory.getScheduler();
+            
+            // Настраиваем планировщик для использования демонических потоков
+            scheduler.getContext().put("org.quartz.scheduler.jmx.export", "false");
+            
             scheduler.start();
+            log.info("Scheduler started successfully");
 
             JobDetail job = JobBuilder.newJob(ProcurementJob.class)
                     .withIdentity("procurementJob", "group1")
@@ -47,8 +55,29 @@ public class ProcurementJob implements Job {
 
             scheduler.scheduleJob(job, trigger);
             log.info("Scheduler started");
+            
+            // Добавляем shutdown hook для корректного завершения планировщика
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                log.info("Shutting down scheduler...");
+                shutdownScheduler();
+            }));
+            
         } catch (SchedulerException e) {
             log.error("Error scheduling job: {}", e.getMessage());
+        }
+    }
+
+    public static void shutdownScheduler() {
+        if (scheduler != null) {
+            try {
+                // Останавливаем планировщик немедленно, не ждем завершения задач
+                scheduler.shutdown(false);
+                log.info("Scheduler shutdown completed");
+            } catch (SchedulerException e) {
+                log.error("Error shutting down scheduler: {}", e.getMessage());
+            } finally {
+                scheduler = null;
+            }
         }
     }
 }

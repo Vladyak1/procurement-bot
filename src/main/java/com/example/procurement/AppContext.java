@@ -1,19 +1,26 @@
 package com.example.procurement;
 
-public class AppContext {
-    private static DatabaseManager databaseManager;
-    private static ParserService parserService;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.experimental.UtilityClass;
 
-    public static void init() {
+@UtilityClass
+public class AppContext {
+    @Getter
+    private DatabaseManager databaseManager;
+    @Getter
+    private ParserService parserService;
+    @Getter
+    private ProcurementProcessingService processingService;
+    @Getter @Setter
+    private TelegramBot bot;
+
+    public void init() {
         databaseManager = new DatabaseManager();
         parserService = new ParserService();
     }
-
-    public static DatabaseManager getDatabaseManager() {
-        return databaseManager;
-    }
-
-    public static ParserService getParserService() {
-        return parserService;
+    
+    public void initProcessingService(TelegramBot bot) {
+        processingService = new ProcurementProcessingService(databaseManager, parserService, bot);
     }
 }
