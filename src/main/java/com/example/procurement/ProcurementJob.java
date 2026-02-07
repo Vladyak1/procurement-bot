@@ -50,7 +50,7 @@ public class ProcurementJob implements Job {
 
             Trigger trigger = TriggerBuilder.newTrigger()
                     .withIdentity("procurementTrigger", "group1")
-                    .withSchedule(CronScheduleBuilder.cronSchedule("0 0 10,18 * * ?"))
+                    .withSchedule(CronScheduleBuilder.cronSchedule("0 0 10,18 ? * MON-FRI"))
                     .build();
 
             scheduler.scheduleJob(job, trigger);
