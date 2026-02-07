@@ -160,6 +160,15 @@ public class Config {
     }
 
     /**
+     * Получает список исключённых видов торгов (из поля "Вид торгов" в RSS)
+     */
+    public static List<String> getExcludedLotTypes() {
+        String typesStr = getEnvOrProperty("FILTER_EXCLUDED_LOT_TYPES", "filter.excluded.lotTypes",
+            "управление многоквартирными домами,отбор региональных операторов,обращение с тко,управляющих организаций");
+        return parseKeywordsList(typesStr);
+    }
+
+    /**
      * Парсит строку с ключевыми словами, разделенными запятыми
      */
     private static List<String> parseKeywordsList(String keywordsStr) {
