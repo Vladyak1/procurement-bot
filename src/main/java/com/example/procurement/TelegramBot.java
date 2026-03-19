@@ -33,7 +33,13 @@ import lombok.AllArgsConstructor;
 
 @Slf4j
 public class TelegramBot extends TelegramLongPollingBot {
-    private static final DecimalFormat DECIMAL_FORMAT = new DecimalFormat("#,##0.00");
+    // Формат цены с пробелами как разделителями тысяч (без копеек для целых)
+    private static final java.text.DecimalFormatSymbols DECIMAL_SYMBOLS = new java.text.DecimalFormatSymbols(java.util.Locale.forLanguageTag("ru-RU"));
+    static {
+        DECIMAL_SYMBOLS.setGroupingSeparator(' ');
+        DECIMAL_SYMBOLS.setDecimalSeparator(',');
+    }
+    private static final DecimalFormat DECIMAL_FORMAT = new DecimalFormat("#,##0.##", DECIMAL_SYMBOLS);
     private static final int TELEGRAM_TEXT_MAX = 4096;
     private static final int TELEGRAM_CAPTION_MAX = 1024;
     private static final ConcurrentHashMap<Long, String> userLotMap = new ConcurrentHashMap<>();
@@ -161,7 +167,11 @@ public class TelegramBot extends TelegramLongPollingBot {
                         msg.setChatId(chatId);
                         msg.setText("Вы отвечаете на вопрос пользователя по лоту " + ctx.lotId + ". После отправки сообщения оно будет переслано пользователю.\n\nВопрос: " + ctx.questionText);
                         msg.setReplyMarkup(markup);
-                        executeWithRetry(msg);
+                        try {
+                            executeWithRetry(msg);
+                        } catch (TelegramApiException e) {
+                            log.error("Failed to send reply prompt to admin {}: {}", userId, e.getMessage());
+                        }
                     }
                 }
                 return;
@@ -179,9 +189,13 @@ public class TelegramBot extends TelegramLongPollingBot {
 
             // Подробное логирование всех сообщений в чате админов
             if (chatId == Config.getAdminGroupId()) {
-                if (update.getMessage().getForwardFrom() != null
+                // Определяем, переслано ли сообщение от бота или из чата парсинга
+                boolean isForwardedFromBot = update.getMessage().getForwardFrom() != null
                     && update.getMessage().getForwardFrom().getUserName() != null
-                    && update.getMessage().getForwardFrom().getUserName().equals("SevNTO_bot")
+                    && update.getMessage().getForwardFrom().getUserName().equals(getBotUsername());
+                boolean isForwardedFromParseGroup = update.getMessage().getForwardFromChat() != null
+                    && update.getMessage().getForwardFromChat().getId() == Config.getParseGroupId();
+                if ((isForwardedFromBot || isForwardedFromParseGroup)
                     && mainText != null && !mainText.isEmpty()) {
                     if (userId != null && adminDeleteLotMap.getOrDefault(userId, false)) {
                         // Логика удаления лота
@@ -269,7 +283,11 @@ public class TelegramBot extends TelegramLongPollingBot {
                 msg.setChatId(chatId);
                 msg.setText("Пришлите лот для удаления из базы данных");
                 msg.setReplyMarkup(markup);
-                executeWithRetry(msg);
+                try {
+                    executeWithRetry(msg);
+                } catch (TelegramApiException e) {
+                    log.error("Failed to send delete prompt to admin {}: {}", chatId, e.getMessage());
+                }
                 return;
             }
 
@@ -309,7 +327,11 @@ public class TelegramBot extends TelegramLongPollingBot {
                 sendMessage.setText(msg);
                 sendMessage.setParseMode("HTML");
                 sendMessage.setReplyMarkup(markup);
-                executeWithRetry(sendMessage);
+                try {
+                    executeWithRetry(sendMessage);
+                } catch (TelegramApiException e) {
+                    log.error("Failed to send lot start message to user {}: {}", userId, e.getMessage());
+                }
                 log.info("User {} started chat for lot: {}", userId, lotId);
                 return;
             }
@@ -407,26 +429,32 @@ public class TelegramBot extends TelegramLongPollingBot {
         String originalTitle = procurement.getTitle() != null ? procurement.getTitle() : "";
         StringBuilder details = new StringBuilder();
 
-        // Для Сбербанк-АСТ: показываем и месячную, и годовую аренду, если есть обе цены
-        boolean isSberAst = procurement.getSource() != null && procurement.getSource().contains("Сбербанк-АСТ");
+        // Определяем тип договора для правильного отображения цен
+        boolean isRentalContract = procurement.getContractTypeName() != null &&
+            procurement.getContractTypeName().toLowerCase().contains("аренды");
 
-        if (isSberAst && procurement.getMonthlyPrice() != null && procurement.getPrice() != null) {
-            // Для Сбербанк-АСТ: месячная аренда
+        if (isRentalContract && procurement.getMonthlyPrice() != null && procurement.getPrice() != null) {
+            // Для договоров аренды показываем и месячную, и годовую цену
             String formattedMonthlyPrice = DECIMAL_FORMAT.format(procurement.getMonthlyPrice());
             details.append("💰Аренда в месяц: ").append(formattedMonthlyPrice).append(" ₽\n");
 
-            // Годовая аренда
             String formattedYearlyPrice = DECIMAL_FORMAT.format(procurement.getPrice());
             details.append("💰Аренда в год: ").append(formattedYearlyPrice).append(" ₽\n");
+        } else if (isRentalContract && procurement.getMonthlyPrice() != null) {
+            // Только месячная цена известна
+            String formattedMonthlyPrice = DECIMAL_FORMAT.format(procurement.getMonthlyPrice());
+            details.append("💰Аренда в месяц: ").append(formattedMonthlyPrice).append(" ₽\n");
+        } else if (isRentalContract && procurement.getPrice() != null) {
+            // Только годовая цена известна
+            String formattedPrice = DECIMAL_FORMAT.format(procurement.getPrice());
+            details.append("💰Аренда в год: ").append(formattedPrice).append(" ₽\n");
+            // Рассчитаем месячную
+            String formattedMonthlyPrice = DECIMAL_FORMAT.format(procurement.getPrice() / 12.0);
+            details.append("💰Аренда в месяц: ").append(formattedMonthlyPrice).append(" ₽\n");
         } else if (procurement.getPrice() != null) {
+            // Для купли-продажи или неизвестного типа
             String formattedPrice = DECIMAL_FORMAT.format(procurement.getPrice());
             details.append("💰").append(priceLabel).append(": ").append(formattedPrice).append(" ₽\n");
-
-            // Если есть месячная цена и price - годовая
-            if (procurement.getMonthlyPrice() != null && priceLabel.contains("год")) {
-                String formattedMonthlyPrice = DECIMAL_FORMAT.format(procurement.getMonthlyPrice());
-                details.append("💰Аренда в мес: ").append(formattedMonthlyPrice).append(" ₽\n");
-            }
         }
 
         if (procurement.getDeposit() != null) {
@@ -443,8 +471,8 @@ public class TelegramBot extends TelegramLongPollingBot {
             // Для ЦДТРФ в contractTerm храним задаток
             if (isCdtrf) {
                 details.append(procurement.getContractTerm()).append("\n");
-            } else {
-                // Для Сбербанк-АСТ и других - срок договора
+            } else if (isRentalContract) {
+                // Срок договора — только для лотов аренды
                 details.append("📅Срок договора: ").append(procurement.getContractTerm()).append("\n");
             }
         }
@@ -463,6 +491,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         String assembleWithLimitForText = assembleWithLimit(header.toString(), originalTitle, details.toString(), TELEGRAM_TEXT_MAX);
         
         Integer sentMessageId = null;
+        boolean lotPublished = false;
         // Проверяем, есть ли картинки и это не Сбербанк-АСТ (у них нет картинок)
         boolean hasSberAstSource = procurement.getSource() != null && procurement.getSource().contains("Сбербанк-АСТ");
         boolean hasCdtrfSource = procurement.getSource() != null && procurement.getSource().contains("ЦДТРФ");
@@ -525,7 +554,8 @@ public class TelegramBot extends TelegramLongPollingBot {
                         SendMediaGroup mediaGroup = new SendMediaGroup();
                         mediaGroup.setChatId(chatId);
                         mediaGroup.setMedias(media);
-                        executeWithRetry(mediaGroup);
+                        executeWithRetry(mediaGroup); // выбросит исключение → поймает catch ниже
+                        lotPublished = true;
                         log.info("Sent {} images for procurement: {} (downloaded)", media.size(), procurement.getNumber());
                     } else {
                         log.warn("No images could be downloaded for procurement: {}", procurement.getNumber());
@@ -535,23 +565,32 @@ public class TelegramBot extends TelegramLongPollingBot {
                 }
             } catch (Exception e) {
                 log.error("Failed to download/send images for procurement {}: {}", procurement.getNumber(), e.getMessage());
-                sentMessageId = executeWithRetry(createHTMLMessage(chatId, assembleWithLimitForText));
+                try {
+                    sentMessageId = executeWithRetry(createHTMLMessage(chatId, assembleWithLimitForText));
+                } catch (TelegramApiException ex) {
+                    log.error("Failed to send fallback message for procurement {}: {}", procurement.getNumber(), ex.getMessage());
+                }
             }
         } else {
             SendMessage sendMessage = new SendMessage();
             sendMessage.setChatId(chatId);
             sendMessage.setText(assembleWithLimitForText);
             sendMessage.setParseMode("HTML");
-            sentMessageId = executeWithRetry(sendMessage);
+            try {
+                sentMessageId = executeWithRetry(sendMessage);
+            } catch (TelegramApiException e) {
+                log.error("Failed to send message for procurement {}: {}", procurement.getNumber(), e.getMessage());
+            }
         }
         // Сохраняем связь messageId <-> номер лота
         if (sentMessageId != null) {
+            lotPublished = true;
             DatabaseManager db = AppContext.getDatabaseManager();
             db.saveMessageId(procurement.getNumber(), sentMessageId, chatId);
         }
 
-        // После публикации лота отправляем ссылку на Яндекс.Карты отдельным сообщением (чистый URL для превью)
-        if (procurement.getAddress() != null && !procurement.getAddress().isEmpty()) {
+        // Ссылку на Яндекс.Карты отправляем только если лот был успешно опубликован
+        if (lotPublished && procurement.getAddress() != null && !procurement.getAddress().isEmpty()) {
             String addressForMap = createOptimizedAddress(procurement.getAddress(), procurement.getCadastralNumber());
             // Отправляем ссылку только если адрес информативный (не просто город)
             boolean informative = addressForMap != null && !addressForMap.isEmpty()
@@ -611,7 +650,11 @@ public class TelegramBot extends TelegramLongPollingBot {
         msg.setText(msgBuilder.toString());
         msg.setParseMode("HTML");
         msg.setReplyMarkup(markup);
-        executeWithRetry(msg);
+        try {
+            executeWithRetry(msg);
+        } catch (TelegramApiException e) {
+            log.error("Failed to send admin notification: {}", e.getMessage());
+        }
     }
 
     private void handleUserQuestion(Update update, List<String> adminIds) {
@@ -638,7 +681,8 @@ public class TelegramBot extends TelegramLongPollingBot {
         String mainText = text != null ? text : caption;
         String procurementNumber = null;
         if (mainText != null && !mainText.isEmpty()) {
-            String mainTextNorm = mainText.replaceAll("\\s+", " ").toLowerCase();
+            // Убираем HTML-теги перед сравнением (подписи содержат <b>, <u>, <a> и т.д.)
+            String mainTextNorm = mainText.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").toLowerCase().trim();
             try (java.sql.Connection conn = java.sql.DriverManager.getConnection(Config.getDbUrl().startsWith("jdbc:") ? Config.getDbUrl() : "jdbc:sqlite:" + Config.getDbUrl())) {
                 java.sql.PreparedStatement stmt = conn.prepareStatement("SELECT number, title FROM procurements");
                 java.sql.ResultSet rs = stmt.executeQuery();
@@ -672,16 +716,24 @@ public class TelegramBot extends TelegramLongPollingBot {
         message.setChatId(chatId);
         message.setText(text);
         // Не используем ParseMode для простоты и надежности
-        executeWithRetry(message);
+        try {
+            executeWithRetry(message);
+        } catch (TelegramApiException e) {
+            log.error("Failed to send message to {}: {}", chatId, e.getMessage());
+        }
     }
-    
+
     public void sendMessageWithMarkdown(long chatId, String text) {
         SendMessage message = new SendMessage();
         message.setChatId(chatId);
         String escapedText = escapeMarkdownV2(text);
         message.setText(escapedText);
         message.setParseMode("MarkdownV2");
-        executeWithRetry(message);
+        try {
+            executeWithRetry(message);
+        } catch (TelegramApiException e) {
+            log.error("Failed to send markdown message to {}: {}", chatId, e.getMessage());
+        }
     }
 
     public void sendMessageWithHTML(long chatId, String text) {
@@ -689,7 +741,11 @@ public class TelegramBot extends TelegramLongPollingBot {
         message.setChatId(chatId);
         message.setText(text);
         message.setParseMode("HTML");
-        executeWithRetry(message);
+        try {
+            executeWithRetry(message);
+        } catch (TelegramApiException e) {
+            log.error("Failed to send HTML message to {}: {}", chatId, e.getMessage());
+        }
     }
 
     private SendMessage createHTMLMessage(long chatId, String text) {
@@ -700,18 +756,14 @@ public class TelegramBot extends TelegramLongPollingBot {
         return message;
     }
 
-    private Integer executeWithRetry(Object method) {
-        try {
-            if (method instanceof SendMessage) {
-                return execute((SendMessage) method).getMessageId();
-            } else if (method instanceof SendMediaGroup) {
-                execute((SendMediaGroup) method);
-                return null;
-            } else if (method instanceof SendPhoto) {
-                return execute((SendPhoto) method).getMessageId();
-            }
-        } catch (TelegramApiException e) {
-            log.error("Failed to execute method: {}", e.getMessage());
+    private Integer executeWithRetry(Object method) throws TelegramApiException {
+        if (method instanceof SendMessage) {
+            return execute((SendMessage) method).getMessageId();
+        } else if (method instanceof SendMediaGroup) {
+            execute((SendMediaGroup) method);
+            return null;
+        } else if (method instanceof SendPhoto) {
+            return execute((SendPhoto) method).getMessageId();
         }
         return null;
     }
@@ -1567,6 +1619,8 @@ public class TelegramBot extends TelegramLongPollingBot {
         StringBuilder details = new StringBuilder();
 
         boolean isSberAst = procurement.getSource() != null && procurement.getSource().contains("Сбербанк-АСТ");
+        boolean isRentalContract = procurement.getContractTypeName() != null &&
+            procurement.getContractTypeName().toLowerCase().contains("аренды");
 
         if (isSberAst && procurement.getMonthlyPrice() != null && procurement.getPrice() != null) {
             String formattedMonthlyPrice = DECIMAL_FORMAT.format(procurement.getMonthlyPrice());
@@ -1595,7 +1649,8 @@ public class TelegramBot extends TelegramLongPollingBot {
         if (procurement.getContractTerm() != null) {
             if (isCdtrf) {
                 details.append(procurement.getContractTerm()).append("\n");
-            } else {
+            } else if (isRentalContract) {
+                // Срок договора — только для лотов аренды
                 details.append("📅Срок договора: ").append(procurement.getContractTerm()).append("\n");
             }
         }
