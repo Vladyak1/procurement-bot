@@ -1,6 +1,7 @@
 package com.example.procurement;
 
 import lombok.extern.slf4j.Slf4j;
+import org.telegram.telegrambots.bots.DefaultBotOptions;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.BotSession;
@@ -8,13 +9,18 @@ import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 
 @Slf4j
 public class Main {
-    
+
     private static TelegramBotsApi botsApi;
     private static TelegramBot bot;
     private static BotSession botSession;
 
     public static void main(String[] args) {
         try {
+            // Включаем глобальный CookieManager для корректной работы сессий HTTP
+            java.net.CookieHandler.setDefault(
+                new java.net.CookieManager(null, java.net.CookiePolicy.ACCEPT_ALL)
+            );
+
             AppContext.init();
             
             // Проверяем, не зарегистрирован ли уже бот
@@ -24,8 +30,16 @@ public class Main {
             }
             
             log.info("Starting Telegram bot registration...");
+            DefaultBotOptions botOptions = new DefaultBotOptions();
+            String proxyHost = Config.getProxyHost();
+            if (proxyHost != null && !proxyHost.isBlank()) {
+                botOptions.setProxyHost(proxyHost);
+                botOptions.setProxyPort(Config.getProxyPort());
+                botOptions.setProxyType(DefaultBotOptions.ProxyType.SOCKS5);
+                log.info("Telegram proxy configured: {}:{}", proxyHost, Config.getProxyPort());
+            }
             botsApi = new TelegramBotsApi(DefaultBotSession.class);
-            bot = new TelegramBot();
+            bot = new TelegramBot(botOptions);
             AppContext.setBot(bot);
             botSession = botsApi.registerBot(bot);
             log.info("Telegram bot registered successfully");

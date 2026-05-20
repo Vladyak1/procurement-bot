@@ -50,7 +50,11 @@ public class DatabaseManager {
                     "area REAL, " +
                     "source TEXT, " +
                     "lotStatus TEXT DEFAULT 'ACTIVE', " +
-                    "isSent INTEGER DEFAULT 0)");
+                    "isSent INTEGER DEFAULT 0, " +
+                    "contractTypeName TEXT, " +
+                    "pricePeriod TEXT, " +
+                    "biddTypeName TEXT, " +
+                    "depositRecipientName TEXT)");
             stmt.execute("CREATE TABLE IF NOT EXISTS message_mappings (" +
                     "procurementNumber TEXT, " +
                     "messageId INTEGER, " +
@@ -88,6 +92,25 @@ public class DatabaseManager {
                 log.warn("Migration for 'lotStatus' column failed (might already exist): {}", e.getMessage());
             }
 
+            // Migration: Add contract/price detail columns if they don't exist
+            for (String[] colDef : new String[][]{
+                    {"contractTypeName", "TEXT"},
+                    {"pricePeriod", "TEXT"},
+                    {"biddTypeName", "TEXT"},
+                    {"depositRecipientName", "TEXT"}
+            }) {
+                try {
+                    ResultSet rs = conn.getMetaData().getColumns(null, null, "procurements", colDef[0]);
+                    if (!rs.next()) {
+                        log.info("Adding missing '{}' column to procurements table", colDef[0]);
+                        stmt.execute("ALTER TABLE procurements ADD COLUMN " + colDef[0] + " " + colDef[1]);
+                    }
+                    rs.close();
+                } catch (SQLException e) {
+                    log.warn("Migration for '{}' column failed: {}", colDef[0], e.getMessage());
+                }
+            }
+
             log.info("Database tables initialized at {}", dbUrl);
         } catch (SQLException e) {
             log.error("Error initializing database at {}: {}", dbUrl, e.getMessage(), e);
@@ -115,6 +138,10 @@ public class DatabaseManager {
                             .area(rs.getDouble("area"))
                             .source(rs.getString("source"))
                             .lotStatus(rs.getString("lotStatus"))
+                            .contractTypeName(rs.getString("contractTypeName"))
+                            .pricePeriod(rs.getString("pricePeriod"))
+                            .biddTypeName(rs.getString("biddTypeName"))
+                            .depositRecipientName(rs.getString("depositRecipientName"))
                             .build();
                     log.debug("Fetched procurement by number: {}", number);
                     return p;
@@ -151,8 +178,8 @@ public class DatabaseManager {
             conn.setAutoCommit(false);
             try (PreparedStatement selectStmt = conn.prepareStatement("SELECT isSent, lotStatus FROM procurements WHERE number = ?");
                  PreparedStatement stmt = conn.prepareStatement(
-                         "INSERT OR REPLACE INTO procurements (number, title, link, lotType, address, price, monthlyPrice, deposit, contractTerm, deadline, cadastralNumber, area, source, lotStatus, isSent) " +
-                                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                         "INSERT OR REPLACE INTO procurements (number, title, link, lotType, address, price, monthlyPrice, deposit, contractTerm, deadline, cadastralNumber, area, source, lotStatus, isSent, contractTypeName, pricePeriod, biddTypeName, depositRecipientName) " +
+                                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
             ) {
                 for (Procurement p : procurements) {
                     int isSent = 0;
@@ -182,6 +209,10 @@ public class DatabaseManager {
                                             (existingLotStatus != null ? existingLotStatus : "ACTIVE");
                     stmt.setString(14, lotStatusToSave);
                     stmt.setInt(15, isSent);
+                    stmt.setString(16, p.getContractTypeName());
+                    stmt.setString(17, p.getPricePeriod());
+                    stmt.setString(18, p.getBiddTypeName());
+                    stmt.setString(19, p.getDepositRecipientName());
                     stmt.executeUpdate();
                     log.debug("Saved procurement: {} (isSent={}, lotStatus={})", p.getNumber(), isSent, lotStatusToSave);
                 }
@@ -362,6 +393,10 @@ public class DatabaseManager {
                             .area(rs.getDouble("area"))
                             .source(rs.getString("source"))
                             .lotStatus(rs.getString("lotStatus"))
+                            .contractTypeName(rs.getString("contractTypeName"))
+                            .pricePeriod(rs.getString("pricePeriod"))
+                            .biddTypeName(rs.getString("biddTypeName"))
+                            .depositRecipientName(rs.getString("depositRecipientName"))
                             .build();
                     procurements.add(p);
                 }
@@ -452,6 +487,44 @@ public class DatabaseManager {
             log.error("Error fetching message mappings: {}", e.getMessage(), e);
         }
         return mappings;
+    }
+
+    /**
+     * Удаляет устаревшие записи: лоты с дедлайном старше 90 дней.
+     * Каскадно удаляет связанные message_mappings и no_match_lots.
+     *
+     * @return количество удалённых лотов
+     */
+    public int cleanupExpiredRecords() {
+        // substr(deadline,1,10) даёт YYYY-MM-DD из ISO-строки вида "2025-01-15T10:00:00+03:00"
+        String condition = "deadline IS NOT NULL AND length(deadline) >= 10 " +
+                           "AND substr(deadline, 1, 10) < date('now', '-90 days')";
+        int deleted = 0;
+        try (Connection conn = DriverManager.getConnection(dbUrl);
+             Statement stmt = conn.createStatement()) {
+            conn.setAutoCommit(false);
+            try {
+                stmt.executeUpdate(
+                    "DELETE FROM message_mappings WHERE procurementNumber IN " +
+                    "(SELECT number FROM procurements WHERE " + condition + ")"
+                );
+                stmt.executeUpdate(
+                    "DELETE FROM no_match_lots WHERE lotId IN " +
+                    "(SELECT number FROM procurements WHERE " + condition + ")"
+                );
+                deleted = stmt.executeUpdate("DELETE FROM procurements WHERE " + condition);
+                conn.commit();
+                if (deleted > 0) {
+                    log.info("Cleanup: removed {} expired records (deadline > 90 days ago)", deleted);
+                }
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            }
+        } catch (SQLException e) {
+            log.error("Error during cleanup of expired records: {}", e.getMessage(), e);
+        }
+        return deleted;
     }
 
     /**

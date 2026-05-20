@@ -37,11 +37,51 @@ public class RssParser {
         this.lotFilter = LotFilter.createDefault();
     }
 
+    /**
+     * Прогревает сессию: делает запрос к странице с фильтром Севастополя,
+     * чтобы сервер установил сессионные куки с региональными предпочтениями.
+     * Без этих кук torgi.gov.ru игнорирует параметр dynSubjRF и возвращает
+     * нефильтрованный общероссийский фид. Выполняется перед каждым RSS-запросом.
+     */
+    private static void ensureSession(String rssUrl) {
+        try {
+            // Извлекаем базовый хост и dynSubjRF из RSS URL для warmup-запроса
+            String warmupUrl = "https://torgi.gov.ru/new/public/lots/hotOffers";
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("dynSubjRF=(\\d+)").matcher(rssUrl);
+            if (m.find()) {
+                warmupUrl += "?dynSubjRF=" + m.group(1)
+                        + "&lotStatus=PUBLISHED,APPLICATIONS_SUBMISSION"
+                        + "&matchPhrase=false&byFirstVersion=true";
+            }
+            log.info("Warming up session with: {}", warmupUrl);
+            java.net.HttpURLConnection warmup = (java.net.HttpURLConnection)
+                    java.net.URI.create(warmupUrl).toURL().openConnection();
+            warmup.setRequestMethod("GET");
+            warmup.setConnectTimeout(15000);
+            warmup.setReadTimeout(15000);
+            warmup.setInstanceFollowRedirects(true);
+            warmup.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+            warmup.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            warmup.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
+            warmup.setRequestProperty("Accept-Encoding", "gzip, deflate");
+            warmup.setRequestProperty("Connection", "keep-alive");
+            int code = warmup.getResponseCode();
+            warmup.getInputStream().transferTo(java.io.OutputStream.nullOutputStream());
+            warmup.disconnect();
+            log.info("Session warmup done (HTTP {}), cookies established", code);
+        } catch (Exception e) {
+            log.warn("Session warmup failed (will proceed anyway): {}", e.getMessage());
+        }
+    }
+
     public List<Procurement> parseUntilEnough(final int maxCount, final boolean notifyAdminOnNoMatch) {
         List<Procurement> procurements = new ArrayList<>();
         Set<String> seenNumbers = new java.util.HashSet<>();
         log.info("Starting RSS parsing from URL: {}", source.getRssUrl());
         log.info("Max count requested: {}, notify on no match: {}", maxCount, notifyAdminOnNoMatch);
+
+        // Прогреваем сессию перед первым RSS-запросом
+        ensureSession(source.getRssUrl());
 
         try {
             java.net.URL url = URI.create(source.getRssUrl()).toURL();
@@ -57,7 +97,7 @@ public class RssParser {
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
             conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
             conn.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
-            conn.setRequestProperty("Accept-Encoding", "gzip, deflate, br");
+            conn.setRequestProperty("Accept-Encoding", "gzip, deflate");
             conn.setRequestProperty("Cache-Control", "no-cache");
             conn.setRequestProperty("Pragma", "no-cache");
             conn.setRequestProperty("Sec-Ch-Ua", "\"Chromium\";v=\"122\", \"Not(A:Brand\";v=\"24\", \"Google Chrome\";v=\"122\"");

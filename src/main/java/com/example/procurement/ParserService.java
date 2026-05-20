@@ -43,15 +43,12 @@ public class ParserService {
                     log.warn("Region validation FAILED on attempt {}/{}: {}",
                         attempt, MAX_RETRY_ATTEMPTS, validation.message);
 
-                    // Отправляем уведомление админам
-                    sendValidationFailureNotification(attempt, validation);
-
                     if (attempt < MAX_RETRY_ATTEMPTS) {
-                        // Ждем перед следующей попыткой
+                        // Ждем перед следующей попыткой — уведомление не отправляем, ретрай может помочь
                         log.info("Waiting {} minutes before retry...", RETRY_DELAY_MINUTES);
                         Thread.sleep(RETRY_DELAY_MINUTES * 60 * 1000);
                     } else {
-                        // Последняя попытка провалена
+                        // Все попытки провалены — уведомляем
                         log.error("All {} attempts failed. Returning empty list.", MAX_RETRY_ATTEMPTS);
                         sendFinalFailureNotification(validation);
                         return new ArrayList<>();
@@ -77,44 +74,6 @@ public class ParserService {
         }
 
         return new ArrayList<>();
-    }
-
-    /**
-     * Отправляет уведомление о неудачной валидации региона
-     */
-    private void sendValidationFailureNotification(int attempt, RegionValidator.ValidationResult validation) {
-        try {
-            TelegramBot bot = AppContext.getBot();
-            if (bot != null) {
-                StringBuilder message = new StringBuilder();
-                message.append("⚠️ <b>Парсинг обнаружил лоты из неправильных регионов</b>\n\n");
-                message.append("Попытка: ").append(attempt).append("/").append(MAX_RETRY_ATTEMPTS).append("\n");
-                message.append("Проблема: ").append(validation.message).append("\n\n");
-
-                if (!validation.wrongRegions.isEmpty()) {
-                    message.append("Обнаруженные регионы:\n");
-                    for (String region : validation.wrongRegions) {
-                        message.append("• ").append(region).append("\n");
-                    }
-                    message.append("\n");
-                }
-
-                if (attempt < MAX_RETRY_ATTEMPTS) {
-                    message.append("RSS API может временно работать некорректно.\n");
-                    message.append("Ожидается автоматический перезапуск через ")
-                           .append(RETRY_DELAY_MINUTES).append(" минут.");
-                }
-
-                org.telegram.telegrambots.meta.api.methods.send.SendMessage msg =
-                    new org.telegram.telegrambots.meta.api.methods.send.SendMessage();
-                msg.setChatId(Config.getAdminGroupId());
-                msg.setText(message.toString());
-                msg.setParseMode("HTML");
-                bot.execute(msg);
-            }
-        } catch (Exception e) {
-            log.error("Failed to send validation failure notification: {}", e.getMessage());
-        }
     }
 
     /**

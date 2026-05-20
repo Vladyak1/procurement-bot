@@ -1,6 +1,7 @@
 package com.example.procurement;
 
 import lombok.extern.slf4j.Slf4j;
+import org.telegram.telegrambots.bots.DefaultBotOptions;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.commands.DeleteMyCommands;
@@ -69,11 +70,16 @@ public class TelegramBot extends TelegramLongPollingBot {
         public final String questionText;
     }
 
-    public TelegramBot() {
+    public TelegramBot(DefaultBotOptions options) {
+        super(options);
         log.info("Initializing TelegramBot instance with ID: {}", instanceId);
-        log.info("Bot username: {}, Token length: {}", getBotUsername(), 
+        log.info("Bot username: {}, Token length: {}", getBotUsername(),
                 getBotToken() != null ? getBotToken().length() : 0);
         initializeCommands();
+    }
+
+    public TelegramBot() {
+        this(new DefaultBotOptions());
     }
 
     private void initializeCommands() {
@@ -103,11 +109,16 @@ public class TelegramBot extends TelegramLongPollingBot {
             deleteDefault.setScope(new BotCommandScopeDefault());
             execute(deleteDefault);
 
-            // Удаляем команды в чате парсинга
-            DeleteMyCommands deleteParseGroup = new DeleteMyCommands();
-            deleteParseGroup.setScope(new BotCommandScopeChat(String.valueOf(Config.getParseGroupId())));
-            execute(deleteParseGroup);
-            log.info("Cleared commands for default and parse group scopes");
+            log.info("Cleared commands for default scope");
+            // Удаляем команды в чате парсинга (может быть каналом — ошибка некритична)
+            try {
+                DeleteMyCommands deleteParseGroup = new DeleteMyCommands();
+                deleteParseGroup.setScope(new BotCommandScopeChat(String.valueOf(Config.getParseGroupId())));
+                execute(deleteParseGroup);
+                log.info("Cleared commands for parse group scope");
+            } catch (TelegramApiException e) {
+                log.warn("Could not clear commands for parse group (channel scope not supported): {}", e.getMessage());
+            }
         } catch (TelegramApiException e) {
             log.error("Error initializing bot commands: {}", e.getMessage());
         }
@@ -395,7 +406,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    public void sendProcurementMessage(long chatId, Procurement procurement) {
+    public boolean sendProcurementMessage(long chatId, Procurement procurement) {
         String lotType = "";
         String priceLabel = "";
         boolean isCdtrf = procurement.getSource() != null && procurement.getSource().contains("ЦДТРФ");
@@ -522,12 +533,13 @@ public class TelegramBot extends TelegramLongPollingBot {
                         photo.setPhoto(inputFile);
                         photo.setCaption(assembleWithLimitForCaption);
                         photo.setParseMode("HTML");
+                        photo.setDisableNotification(true);
                         sentMessageId = executeWithRetry(photo);
                         in.close();
                         log.info("Sent 1 image for procurement: {}", procurement.getNumber());
                     } else {
-                        log.warn("Failed to load image for procurement: {}", procurement.getNumber());
-                        sentMessageId = executeWithRetry(createHTMLMessage(chatId, assembleWithLimitForText));
+                        log.warn("Image unavailable for procurement {}, skipping publish", procurement.getNumber());
+                        // Не публикуем без картинки — лот будет повторно обработан на следующем запуске
                     }
                 } else {
                     List<InputMedia> media = new ArrayList<>();
@@ -554,28 +566,26 @@ public class TelegramBot extends TelegramLongPollingBot {
                         SendMediaGroup mediaGroup = new SendMediaGroup();
                         mediaGroup.setChatId(chatId);
                         mediaGroup.setMedias(media);
+                        mediaGroup.setDisableNotification(true);
                         executeWithRetry(mediaGroup); // выбросит исключение → поймает catch ниже
                         lotPublished = true;
                         log.info("Sent {} images for procurement: {} (downloaded)", media.size(), procurement.getNumber());
                     } else {
-                        log.warn("No images could be downloaded for procurement: {}", procurement.getNumber());
-                        sentMessageId = executeWithRetry(createHTMLMessage(chatId, assembleWithLimitForText));
+                        log.warn("No images could be downloaded for procurement {}, skipping publish", procurement.getNumber());
+                        // Не публикуем без картинок — лот будет повторно обработан на следующем запуске
                     }
                     for (InputStream s : streams) try { s.close(); } catch (Exception ignore) {}
                 }
             } catch (Exception e) {
-                log.error("Failed to download/send images for procurement {}: {}", procurement.getNumber(), e.getMessage());
-                try {
-                    sentMessageId = executeWithRetry(createHTMLMessage(chatId, assembleWithLimitForText));
-                } catch (TelegramApiException ex) {
-                    log.error("Failed to send fallback message for procurement {}: {}", procurement.getNumber(), ex.getMessage());
-                }
+                log.error("Failed to download/send images for procurement {}, skipping publish: {}", procurement.getNumber(), e.getMessage());
+                // Не публикуем без картинок — лот будет повторно обработан на следующем запуске
             }
         } else {
             SendMessage sendMessage = new SendMessage();
             sendMessage.setChatId(chatId);
             sendMessage.setText(assembleWithLimitForText);
             sendMessage.setParseMode("HTML");
+            sendMessage.setDisableNotification(true);
             try {
                 sentMessageId = executeWithRetry(sendMessage);
             } catch (TelegramApiException e) {
@@ -604,6 +614,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                         linkMsg.setChatId(chatId);
                         linkMsg.setText(finalUrl); // Без Markdown-экранирования
                         linkMsg.setDisableWebPagePreview(false); // Разрешаем превью
+                        linkMsg.setDisableNotification(true);
                         executeWithRetry(linkMsg);
                     } else {
                         log.warn("Не удалось сгенерировать короткую ссылку на Яндекс карты для адреса: {}", addressForMap);
@@ -613,6 +624,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 }
             }
         }
+        return lotPublished;
     }
 
     private void sendUserQuestionToAdmins(Long userId, String username, String lotId, String lotTitle, String userMessage) {
@@ -680,17 +692,40 @@ public class TelegramBot extends TelegramLongPollingBot {
         String caption = update.getMessage().getCaption();
         String mainText = text != null ? text : caption;
         String procurementNumber = null;
-        if (mainText != null && !mainText.isEmpty()) {
-            // Убираем HTML-теги перед сравнением (подписи содержат <b>, <u>, <a> и т.д.)
+
+        // Сначала пробуем извлечь номер лота из entities (text_link с ?start=lot_XXX)
+        // Это надёжнее, чем поиск по заголовку
+        java.util.List<org.telegram.telegrambots.meta.api.objects.MessageEntity> entities =
+            update.getMessage().getEntities();
+        if (entities == null) {
+            entities = update.getMessage().getCaptionEntities();
+        }
+        if (entities != null) {
+            java.util.regex.Pattern lotPattern = java.util.regex.Pattern.compile("[?&]start=lot_([^&\\s]+)");
+            for (org.telegram.telegrambots.meta.api.objects.MessageEntity entity : entities) {
+                if ("text_link".equals(entity.getType()) && entity.getUrl() != null) {
+                    java.util.regex.Matcher m = lotPattern.matcher(entity.getUrl());
+                    if (m.find()) {
+                        procurementNumber = m.group(1);
+                        log.info("[BOT] Номер лота извлечён из entity URL: {}", procurementNumber);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Fallback: поиск по заголовку (берём самый новый совпадающий лот)
+        if (procurementNumber == null && mainText != null && !mainText.isEmpty()) {
             String mainTextNorm = mainText.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").toLowerCase().trim();
             try (java.sql.Connection conn = java.sql.DriverManager.getConnection(Config.getDbUrl().startsWith("jdbc:") ? Config.getDbUrl() : "jdbc:sqlite:" + Config.getDbUrl())) {
-                java.sql.PreparedStatement stmt = conn.prepareStatement("SELECT number, title FROM procurements");
+                java.sql.PreparedStatement stmt = conn.prepareStatement("SELECT number, title FROM procurements ORDER BY rowid DESC");
                 java.sql.ResultSet rs = stmt.executeQuery();
                 while (rs.next()) {
                     String dbTitle = rs.getString("title");
                     String dbTitleNorm = dbTitle != null ? dbTitle.replaceAll("\\s+", " ").toLowerCase() : "";
                     if (dbTitle != null && mainTextNorm.contains(dbTitleNorm)) {
                         procurementNumber = rs.getString("number");
+                        log.info("[BOT] Номер лота найден по заголовку (fallback): {}", procurementNumber);
                         break;
                     }
                 }
@@ -700,6 +735,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 sendMessageWithRetry(chatId, "⛔ Ошибка поиска лота: " + e.getMessage());
             }
         }
+
         Long userId = update.getMessage().getFrom() != null ? update.getMessage().getFrom().getId() : null;
         if (procurementNumber != null) {
             String lotUrl = "https://torgi.gov.ru/new/public/lots/lot/" + procurementNumber + "/(lotInfo:info)?fromRec=false";
@@ -753,19 +789,50 @@ public class TelegramBot extends TelegramLongPollingBot {
         message.setChatId(chatId);
         message.setText(text);
         message.setParseMode("HTML");
+        message.setDisableNotification(true);
         return message;
     }
 
     private Integer executeWithRetry(Object method) throws TelegramApiException {
-        if (method instanceof SendMessage) {
-            return execute((SendMessage) method).getMessageId();
-        } else if (method instanceof SendMediaGroup) {
-            execute((SendMediaGroup) method);
-            return null;
-        } else if (method instanceof SendPhoto) {
-            return execute((SendPhoto) method).getMessageId();
+        int maxRetries = 3;
+        int delayMs = 3000;
+        TelegramApiException lastException = null;
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                if (method instanceof SendMessage) {
+                    return execute((SendMessage) method).getMessageId();
+                } else if (method instanceof SendMediaGroup) {
+                    execute((SendMediaGroup) method);
+                    return null;
+                } else if (method instanceof SendPhoto) {
+                    return execute((SendPhoto) method).getMessageId();
+                }
+                return null;
+            } catch (TelegramApiException e) {
+                lastException = e;
+                String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+                boolean is429 = msg.contains("429") || msg.contains("too many requests");
+                boolean isNetworkError = msg.contains("timeout") || msg.contains("connect")
+                        || msg.contains("failed to respond") || msg.contains("nohttpresponse")
+                        || msg.contains("reset") || msg.contains("refused");
+                if (is429) {
+                    int retryAfter = 30;
+                    java.util.regex.Matcher m429 = java.util.regex.Pattern.compile("retry after (\\d+)").matcher(msg);
+                    if (m429.find()) retryAfter = Integer.parseInt(m429.group(1));
+                    log.warn("Rate limited (429), waiting {}s before retry (attempt {}/{})...", retryAfter, attempt, maxRetries);
+                    try { Thread.sleep((retryAfter + 2) * 1000L); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    attempt--; // не считаем 429 как попытку
+                } else if (isNetworkError && attempt < maxRetries) {
+                    log.warn("Attempt {}/{} failed ({}): {}. Retrying in {}ms...",
+                            attempt, maxRetries, method.getClass().getSimpleName(), e.getMessage(), delayMs);
+                    try { Thread.sleep(delayMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    delayMs *= 2;
+                } else {
+                    throw e;
+                }
+            }
         }
-        return null;
+        throw lastException;
     }
 
     // Собирает итоговый текст из: header + title + details, при необходимости урезая title
@@ -1136,13 +1203,19 @@ public class TelegramBot extends TelegramLongPollingBot {
      */
     public static String cleanAddress(String address) {
         if (address == null) return null;
-        
+
         // Удаляем лишние пробелы и приводим к нормальному виду
         String cleaned = address.trim().replaceAll("\\s+", " ");
-        
+
+        // Удаляем внутригородские территориальные единицы вида "вн.тер.г. Гагаринский муниципальный округ"
+        // Они сбивают геокодер: "Гагаринский" матчится на г. Гагарин Смоленской области вместо Севастополя
+        cleaned = cleaned.replaceAll(",?\\s*вн\\.тер\\.г\\.\\s*[^,]+", "");
+        // Убираем двойные запятые после удаления
+        cleaned = cleaned.replaceAll(",\\s*,", ",").replaceAll("^\\s*,\\s*", "").trim();
+
         // Удаляем детали, которые не нужны для поиска
         String[] stopWords = {
-            "кв.", "квартира", "литер", "лит.", "строение", "стр.", "корпус", "корп.", 
+            "кв.", "квартира", "литер", "лит.", "строение", "стр.", "корпус", "корп.",
             "помещение", "офис", "подъезд", "этаж", "комната", "кабинет"
         };
         
@@ -1363,7 +1436,9 @@ public class TelegramBot extends TelegramLongPollingBot {
     private String createYandexMapsShortLink(String address) {
         try {
             String encodedAddress = java.net.URLEncoder.encode(address, java.nio.charset.StandardCharsets.UTF_8);
-            String yandexUrl = "https://yandex.ru/maps/?text=" + encodedAddress;
+            // ll и spn привязывают геокодер к Севастополю — иначе "Гагаринский" матчится на Смоленскую область
+            String yandexUrl = "https://yandex.ru/maps/?text=" + encodedAddress
+                    + "&ll=33.5254%2C44.6054&spn=0.5%2C0.5";
             return shortenWithClck(yandexUrl);
         } catch (Exception e) {
             log.warn("Ошибка при создании короткой ссылки для адреса {}: {}", address, e.getMessage());

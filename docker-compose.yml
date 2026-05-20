@@ -9,6 +9,8 @@ services:
       - ./logs:/app/logs
       - ./cache:/app/cache
       - ./src/main/resources/application.properties:/app/application.properties
+    env_file:
+      - .env
     environment:
       - JAVA_OPTS=-Dfile.encoding=UTF-8 -Duser.timezone=Europe/Moscow
     restart: unless-stopped

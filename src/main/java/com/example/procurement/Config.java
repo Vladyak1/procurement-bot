@@ -107,6 +107,19 @@ public class Config {
         return getEnvOrProperty("DB_URL", "db.url", "data/procurements.db");
     }
 
+    public static String getProxyHost() {
+        String host = getEnvOrProperty("PROXY_HOST", "proxy.host", null);
+        return (host != null && host.isBlank()) ? null : host;
+    }
+
+    public static int getProxyPort() {
+        try {
+            return Integer.parseInt(getEnvOrProperty("PROXY_PORT", "proxy.port", "1080"));
+        } catch (NumberFormatException e) {
+            return 1080;
+        }
+    }
+
     /**
      * Получает список источников парсинга из конфигурации
      * Формат: parser.sources=name1|url1;name2|url2;...

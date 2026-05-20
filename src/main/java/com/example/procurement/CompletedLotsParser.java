@@ -7,13 +7,14 @@ import com.rometools.rome.io.XmlReader;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.URI;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
 
 /**
  * Парсер для завершенных/неактуальных лотов с torgi.gov.ru
@@ -55,9 +56,44 @@ public class CompletedLotsParser {
 
         try {
             java.net.URL url = URI.create(completedLotsRssUrl).toURL();
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(30000);
+            conn.setReadTimeout(30000);
+            conn.setInstanceFollowRedirects(false);
+
+            // Актуальные браузерные заголовки
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+            conn.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
+            conn.setRequestProperty("Accept-Encoding", "gzip, deflate, br");
+            conn.setRequestProperty("Cache-Control", "no-cache");
+            conn.setRequestProperty("Sec-Ch-Ua", "\"Chromium\";v=\"122\", \"Not(A:Brand\";v=\"24\", \"Google Chrome\";v=\"122\"");
+            conn.setRequestProperty("Sec-Ch-Ua-Mobile", "?0");
+            conn.setRequestProperty("Sec-Ch-Ua-Platform", "\"Windows\"");
+            conn.setRequestProperty("Sec-Fetch-Dest", "document");
+            conn.setRequestProperty("Sec-Fetch-Mode", "navigate");
+            conn.setRequestProperty("Sec-Fetch-Site", "none");
+            conn.setRequestProperty("Connection", "keep-alive");
+
+            int responseCode = conn.getResponseCode();
+            log.info("Completed lots RSS response: code={}, content-type={}", responseCode, conn.getContentType());
+
+            // Обработка редиректов
+            if (responseCode == 301 || responseCode == 302 || responseCode == 303 || responseCode == 307 || responseCode == 308) {
+                String location = conn.getHeaderField("Location");
+                log.warn("!!! REDIRECT in completed lots RSS: {} -> {}", completedLotsRssUrl, location);
+                throw new RuntimeException("Redirect detected in completed lots RSS: " + location);
+            }
+
+            if (responseCode != 200) {
+                log.error("Completed lots RSS returned HTTP {}", responseCode);
+                throw new RuntimeException("Completed lots RSS returned HTTP " + responseCode);
+            }
+
             SyndFeedInput input = new SyndFeedInput();
             SyndFeed feed;
-            try (InputStream is = url.openStream(); XmlReader xr = new XmlReader(is)) {
+            try (InputStream is = getDecodedInputStream(conn); XmlReader xr = new XmlReader(is)) {
                 feed = input.build(xr);
             }
             List<SyndEntry> entries = feed.getEntries();
@@ -206,5 +242,23 @@ public class CompletedLotsParser {
             default:
                 return status; // Возвращаем как есть для неизвестных статусов
         }
+    }
+
+    /**
+     * Получает декодированный InputStream с учетом Content-Encoding (gzip, deflate)
+     */
+    private InputStream getDecodedInputStream(HttpURLConnection conn) throws Exception {
+        String encoding = conn.getContentEncoding();
+        InputStream is = conn.getInputStream();
+
+        if ("gzip".equalsIgnoreCase(encoding)) {
+            log.debug("Decoding gzip response");
+            return new GZIPInputStream(is);
+        } else if ("deflate".equalsIgnoreCase(encoding)) {
+            log.debug("Decoding deflate response");
+            return new java.util.zip.InflaterInputStream(is);
+        }
+
+        return is;
     }
 }

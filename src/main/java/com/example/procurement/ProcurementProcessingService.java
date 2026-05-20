@@ -60,15 +60,29 @@ public class ProcurementProcessingService {
         for (Procurement p : newProcurements) {
             if (published >= maxCount) break;
 
+            // Проверяем регион на уровне лота: адрес должен содержать Севастополь,
+            // либо кадастровый/номер лота начинается с 91
+            if (!isFromSevastopol(p)) {
+                log.warn("Лот {} пропущен: не из Севастополя (адрес: {})", p.getNumber(), p.getAddress());
+                databaseManager.markAsSent(p.getNumber()); // чтобы не пытаться снова
+                continue;
+            }
+
             log.info("Публикация лота {}...", p.getNumber());
-            bot.sendProcurementMessage(chatId, p);
-            databaseManager.markAsSent(p.getNumber());
-            published++;
-            log.info("Лот {} опубликован и помечен как отправленный", p.getNumber());
+            boolean sent = bot.sendProcurementMessage(chatId, p);
+            if (sent) {
+                databaseManager.markAsSent(p.getNumber());
+                published++;
+                log.info("Лот {} опубликован и помечен как отправленный", p.getNumber());
+            } else {
+                log.error("Лот {} НЕ опубликован (ошибка отправки), не помечаем как отправленный", p.getNumber());
+            }
         }
 
         log.info("Parsing completed. Total procurements: {}, new: {}, published: {}",
             allProcurements.size(), newProcurements.size(), published);
+
+        databaseManager.cleanupExpiredRecords();
 
         return published;
     }
@@ -120,6 +134,20 @@ public class ProcurementProcessingService {
                     log.info("Deadline changed for lot {}: {} -> {}", lotNumber, oldDeadline, newDeadline);
                     databaseManager.updateDeadline(lotNumber, newDeadline);
                     sendDeadlineChangeNotification(adminChatId, activeLot, oldDeadline, newDeadline);
+
+                    // Обновляем опубликованные сообщения с новой датой
+                    Procurement updatedLot = databaseManager.getProcurementByNumber(lotNumber);
+                    if (updatedLot != null) {
+                        List<DatabaseManager.MessageMapping> mappings = databaseManager.getMessageMappings(lotNumber);
+                        for (DatabaseManager.MessageMapping mapping : mappings) {
+                            try {
+                                bot.updateProcurementMessage(mapping.chatId, mapping.messageId, updatedLot);
+                                log.info("Updated message {} in chat {} after deadline change for lot {}", mapping.messageId, mapping.chatId, lotNumber);
+                            } catch (Exception e) {
+                                log.error("Failed to update message {} after deadline change for lot {}: {}", mapping.messageId, lotNumber, e.getMessage());
+                            }
+                        }
+                    }
                     deadlineUpdates++;
                 }
             }
@@ -292,6 +320,13 @@ public class ProcurementProcessingService {
 
         log.info("All sources parsing completed. Total published: {}", totalPublished);
         return totalPublished;
+    }
+
+    private boolean isFromSevastopol(Procurement p) {
+        if (p.getNumber() != null && p.getNumber().startsWith("91")) return true;
+        if (p.getCadastralNumber() != null && p.getCadastralNumber().startsWith("91:")) return true;
+        if (p.getAddress() != null && p.getAddress().toLowerCase().contains("севастополь")) return true;
+        return false;
     }
 }
 

@@ -5,11 +5,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.zip.GZIPInputStream;
 
 @Slf4j
 public class LotPageParser {
@@ -29,23 +32,47 @@ public class LotPageParser {
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(15000);
+            conn.setInstanceFollowRedirects(false);
 
-            // Полноценные браузерные заголовки для обхода анти-бот защиты
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            // Актуальные браузерные заголовки (Chrome 122)
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
             conn.setRequestProperty("Accept", "application/json, text/plain, */*");
             conn.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7");
-            conn.setRequestProperty("Referer", "https://torgi.gov.ru/");
+            conn.setRequestProperty("Accept-Encoding", "gzip, deflate, br");
+            conn.setRequestProperty("Referer", "https://torgi.gov.ru/new/public/lots/lot/" + procurement.getNumber());
+            conn.setRequestProperty("Origin", "https://torgi.gov.ru");
             conn.setRequestProperty("Connection", "keep-alive");
+            conn.setRequestProperty("Sec-Ch-Ua", "\"Chromium\";v=\"122\", \"Not(A:Brand\";v=\"24\", \"Google Chrome\";v=\"122\"");
+            conn.setRequestProperty("Sec-Ch-Ua-Mobile", "?0");
+            conn.setRequestProperty("Sec-Ch-Ua-Platform", "\"Windows\"");
             conn.setRequestProperty("Sec-Fetch-Dest", "empty");
             conn.setRequestProperty("Sec-Fetch-Mode", "cors");
             conn.setRequestProperty("Sec-Fetch-Site", "same-origin");
 
             int responseCode = conn.getResponseCode();
-            if (responseCode != 200) {
-                log.warn("XHR API returned non-200 for {}: {}", procurement.getNumber(), responseCode);
+
+            // Обработка редиректов
+            if (responseCode == 301 || responseCode == 302 || responseCode == 303 || responseCode == 307 || responseCode == 308) {
+                String location = conn.getHeaderField("Location");
+                log.warn("XHR API redirect for {}: {} -> {}", procurement.getNumber(), responseCode, location);
                 return;
             }
-            BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+
+            if (responseCode != 200) {
+                log.warn("XHR API returned non-200 for {}: {} (Content-Type: {})",
+                    procurement.getNumber(), responseCode, conn.getContentType());
+                return;
+            }
+            // Поддержка gzip
+            InputStream is = conn.getInputStream();
+            String encoding = conn.getContentEncoding();
+            if ("gzip".equalsIgnoreCase(encoding)) {
+                is = new GZIPInputStream(is);
+            } else if ("deflate".equalsIgnoreCase(encoding)) {
+                is = new java.util.zip.InflaterInputStream(is);
+            }
+
+            BufferedReader in = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
             StringBuilder response = new StringBuilder();
             String inputLine;
             while ((inputLine = in.readLine()) != null) {
@@ -53,11 +80,21 @@ public class LotPageParser {
             }
             in.close();
             String json = response.toString();
+
+            // Проверка на HTML вместо JSON
+            if (json.trim().startsWith("<!") || json.trim().startsWith("<html")) {
+                log.warn("XHR API returned HTML instead of JSON for {}", procurement.getNumber());
+                log.debug("HTML preview: {}", json.substring(0, Math.min(200, json.length())));
+                return;
+            }
             ObjectMapper mapper = new ObjectMapper();
             JsonNode root = mapper.readTree(json);
             // Основные поля
             procurement.setTitle(root.path("lotName").asText(procurement.getTitle()));
-            procurement.setAddress(root.path("estateAddress").asText(null));
+            String apiAddress = root.path("estateAddress").asText(null);
+            if (apiAddress != null && !apiAddress.isEmpty()) {
+                procurement.setAddress(apiAddress);
+            }
             Double price = root.path("priceMin").asDouble(0);
             procurement.setPrice(price == 0 ? null : price);
             // Площадь: сначала из area, если нет — ищем в characteristics
@@ -74,10 +111,20 @@ public class LotPageParser {
                 }
             }
             procurement.setArea(area == 0 ? null : area);
-            procurement.setDeadline(root.path("biddEndTime").asText(null));
-            procurement.setCadastralNumber(root.path("cadastralNumber").asText(null));
+            String apiDeadline = root.path("biddEndTime").asText(null);
+            if (apiDeadline != null && !apiDeadline.isEmpty()) {
+                procurement.setDeadline(apiDeadline);
+            }
+            String apiCadastral = root.path("cadastralNumber").asText(null);
+            if (apiCadastral != null && !apiCadastral.isEmpty()) {
+                procurement.setCadastralNumber(apiCadastral);
+            }
             procurement.setDeposit(root.path("deposit").asDouble(0) == 0 ? null : root.path("deposit").asDouble());
-            procurement.setContractTerm(root.path("contractTerm").asText(null));
+            // contractTerm из root может быть числом (лет) без единицы, будет переопределён из attributes если там есть
+            String rootContractTerm = root.path("contractTerm").asText(null);
+            if (rootContractTerm != null && !rootContractTerm.isEmpty()) {
+                procurement.setContractTerm(rootContractTerm);
+            }
             procurement.setDepositRecipientName(root.path("depositRecipientName").asText(null));
             // Фото (только первые 4)
             List<String> imageUrls = new ArrayList<>();
@@ -113,6 +160,7 @@ public class LotPageParser {
             String contractTypeName = procurement.getContractTypeName();
             String pricePeriod = procurement.getPricePeriod();
             JsonNode attributes = root.path("attributes");
+            int termYears = -1, termMonths = -1, termDays = -1;
             if (attributes.isArray()) {
                 for (JsonNode attr : attributes) {
                     String code = attr.path("code").asText("");
@@ -132,7 +180,47 @@ public class LotPageParser {
                             pricePeriod = value.asText(pricePeriod);
                         }
                     }
+                    if (fullName.startsWith("Срок действия договора")) {
+                        String termValue = null;
+                        if (value.isNumber()) {
+                            termValue = value.asText();
+                        } else if (value.isTextual() && !value.asText().isEmpty()) {
+                            termValue = value.asText();
+                        } else if (value.isObject()) {
+                            termValue = value.path("name").asText(null);
+                        }
+                        if (termValue != null && !termValue.isEmpty()) {
+                            try {
+                                int val = Integer.parseInt(termValue.trim());
+                                if (fullName.contains("(лет)")) {
+                                    termYears = val;
+                                } else if (fullName.contains("(месяцев)")) {
+                                    termMonths = val;
+                                } else if (fullName.contains("(дней)")) {
+                                    termDays = val;
+                                } else {
+                                    // Неизвестная единица — ставим как есть
+                                    procurement.setContractTerm(termValue);
+                                }
+                            } catch (NumberFormatException e) {
+                                // Не число (например, текстовое описание) — ставим как есть
+                                procurement.setContractTerm(termValue);
+                            }
+                        }
+                    }
                 }
+            }
+            // Собираем срок из компонентов, пропуская нулевые
+            if (termYears >= 0 || termMonths >= 0 || termDays >= 0) {
+                StringBuilder term = new StringBuilder();
+                if (termYears > 0) term.append(termYears).append(" лет ");
+                if (termMonths > 0) term.append(termMonths).append(" мес. ");
+                if (termDays > 0) term.append(termDays).append(" дн.");
+                String combined = term.toString().trim();
+                if (!combined.isEmpty()) {
+                    procurement.setContractTerm(combined);
+                }
+                // Если все нули — оставляем значение из root (уже установлено выше)
             }
             procurement.setContractTypeName(contractTypeName);
             procurement.setPricePeriod(pricePeriod);
