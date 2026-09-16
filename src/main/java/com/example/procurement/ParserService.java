@@ -38,6 +38,12 @@ public class ParserService {
                         lotPageParser.enrichProcurement(p, source.getXhrUrl());
                     }
 
+                    // Обрабатываем неопределённые (no-match) лоты: обогащаем, фильтруем по городу,
+                    // и для севастопольских шлём админам на ревью с кнопками
+                    if (notifyAdminOnNoMatch) {
+                        processNoMatchLots(rssParser.getNoMatchLots(), source);
+                    }
+
                     return procurements;
                 } else {
                     log.warn("Region validation FAILED on attempt {}/{}: {}",
@@ -74,6 +80,59 @@ public class ParserService {
         }
 
         return new ArrayList<>();
+    }
+
+    /**
+     * Обрабатывает неопределённые (no-match) лоты: обогащает, отсекает не-севастопольские
+     * (по subjectRfCode), а севастопольские отправляет админам на ревью с кнопками ✅/❌.
+     * Помечает все обработанные в no_match_lots, чтобы не повторять каждый прогон.
+     */
+    private void processNoMatchLots(List<Procurement> noMatchLots, ParsingSource source) {
+        if (noMatchLots == null || noMatchLots.isEmpty()) {
+            return;
+        }
+        DatabaseManager db = AppContext.getDatabaseManager();
+        TelegramBot bot = AppContext.getBot();
+        if (bot == null || db == null) {
+            return;
+        }
+        log.info("Обработка {} no-match лотов для ревью админами", noMatchLots.size());
+        for (Procurement p : noMatchLots) {
+            try {
+                if (db.isNoMatchSent(p.getNumber())) {
+                    continue; // уже отправляли на ревью ранее
+                }
+                lotPageParser.enrichProcurement(p, source.getXhrUrl());
+                // Фильтр по городу: беспокоим админов только севастопольскими лотами
+                if (!"92".equals(p.getSubjectRfCode())) {
+                    log.info("No-match лот {} не из Севастополя (subjRF={}), на ревью не отправляем",
+                            p.getNumber(), p.getSubjectRfCode());
+                    db.markNoMatchSent(p.getNumber()); // чтобы не обогащать снова каждый прогон
+                    continue;
+                }
+                // Авто-отсев заведомо движимого имущества (категория 406/101, признак в описании):
+                // на ревью идут только genuinely-ambiguous лоты, а не известный мусор
+                ProcurementProcessingService pps = AppContext.getProcessingService();
+                if (pps != null && pps.isMovableProperty(p)) {
+                    log.info("No-match лот {} — заведомо движимое (cat={}), на ревью не шлём",
+                            p.getNumber(), p.getCategoryCode());
+                    db.markNoMatchSent(p.getNumber());
+                    continue;
+                }
+                bot.sendNoMatchLotForReview(p);
+                db.markNoMatchSent(p.getNumber());
+                log.info("No-match лот {} отправлен админам на ревью", p.getNumber());
+            } catch (Exception e) {
+                log.warn("Ошибка обработки no-match лота {}: {}", p.getNumber(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Обогащает один лот (используется при одобрении no-match лота админом).
+     */
+    public void enrichOne(Procurement p) {
+        lotPageParser.enrichProcurement(p, Config.getXhrUrl());
     }
 
     /**

@@ -107,6 +107,15 @@ public class Config {
         return getEnvOrProperty("DB_URL", "db.url", "data/procurements.db");
     }
 
+    /**
+     * Ключ DaData для поиска координат по кадастровому номеру. Хранится только в .env:
+     * в репозиторий и в application.properties не попадает.
+     */
+    public static String getDadataApiKey() {
+        String key = getEnvOrProperty("DADATA_API_KEY", "dadata.apiKey", null);
+        return (key != null && key.isBlank()) ? null : key;
+    }
+
     public static String getProxyHost() {
         String host = getEnvOrProperty("PROXY_HOST", "proxy.host", null);
         return (host != null && host.isBlank()) ? null : host;
@@ -167,8 +176,11 @@ public class Config {
      * Получает список ключевых слов для исключения лотов
      */
     public static List<String> getExcludeKeywords() {
+        // Без "транспорт" и "оборудование": слова матчатся подстрокой по заголовку+адресу и
+        // режут валидную недвижимость ("помещение с оборудованием", адрес "ул. Транспортная").
+        // Движимое по этим признакам надёжно отсекается категориями 400/110/16 (BLOCKED_CATEGORIES).
         String excludeStr = getEnvOrProperty("FILTER_EXCLUDE_KEYWORDS", "filter.exclude.keywords",
-            "автомобиль,камаз,маз,трактор,погрузчик,лом,судно,гидроцикл,транспорт,оборудование,станок");
+            "автомобиль,камаз,маз,трактор,погрузчик,лом,судно,гидроцикл,станок");
         return parseKeywordsList(excludeStr);
     }
 

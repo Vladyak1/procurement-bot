@@ -23,7 +23,22 @@ import java.util.regex.Pattern;
 @Slf4j
 public class SberAstParser {
     private static final String BASE_URL = "https://www.sberbank-ast.ru";
-    private static final String API_URL = BASE_URL + "/SearchQuery.aspx?name=Main";
+    // API площадки после переезда на SPA (август 2026). Старые .aspx-эндпоинты
+    // (UnitedPurchaseList.aspx, SearchQuery.aspx) отдают 404 — на них парсер и сломался 24.08.2026.
+    private static final String LIST_PAGE = "/UnitedPurchaseList.html";
+    private static final String API_URL = BASE_URL + "/api/Processing/main";
+    private static final String WINDOW_CODE = "/EsOpenUnitedPurchaseList";
+    private static final String TARGET_PAGE_CODE = "OTUnitedPurchaseList";
+    private static final String USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+    // Площадка отдаёт максимум 200 записей за запрос; по нашему фильтру всего ~800 лотов.
+    private static final int MAX_PAGE_SIZE = 200;
+
+    // Заглушка для карточки: у Сбербанк-АСТ фотографий нет вообще — детальная страница
+    // рендерится через JS, а в ответе ES-API полей с изображениями не приходит.
+    // Файл лежит в resources/images/, картинка нейтральная («Извещение о проведении
+    // аукциона»), та же, что у ЦДТРФ. Без неё карточка уходит голым текстом.
+    private static final String DEFAULT_IMAGE_PATH = "default_bankrot_image.jpg";
 
     // Паттерны для извлечения данных
     private static final Pattern AREA_PATTERN = Pattern.compile("([\\d\\s]+[,.]?\\d*)\\s*(?:кв\\.?\\s*м|м2)");
@@ -58,140 +73,55 @@ public class SberAstParser {
         try {
             log.info("Starting SberAst API parsing from {}", API_URL);
 
-            // Шаг 1: Получаем cookies через GET запрос к главной странице
-            log.info("Step 1: Obtaining session cookies from {}/UnitedPurchaseList.aspx", BASE_URL);
-            Map<String, String> cookies = Jsoup.connect(BASE_URL + "/UnitedPurchaseList.aspx")
-                    .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                    .timeout(300000)
-                    .execute()
-                    .cookies();
-            log.info("Obtained {} cookies: {}", cookies.size(), cookies.keySet());
+            // Размер страницы: вызывающий передаёт Integer.MAX_VALUE, площадка столько не отдаст.
+            int pageSize = Math.min(maxCount, MAX_PAGE_SIZE);
+            String payload = buildRequestBody(pageSize);
+            log.debug("SberAst request payload: {}", payload);
 
-            // Формируем XML payload для запроса
-            String xmlPayload = buildElasticSearchRequest(maxCount);
-            log.info("XML payload length: {}, first 300 chars: {}", xmlPayload.length(),
-                    xmlPayload.substring(0, Math.min(300, xmlPayload.length())));
-
-            // Шаг 2: Выполняем POST запрос к API с cookies и дополнительными заголовками
-            log.info("Step 2: Sending POST request with {} cookies...", cookies.size());
-            log.info("POST data: xmlData length={}, orgId=0, targetPageCode=UnitedPurchaseList, PID=0",
-                    xmlPayload.length());
-
-            // Convert cookies to header string
-            String cookieHeader = cookies.entrySet().stream()
-                    .map(e -> e.getKey() + "=" + e.getValue())
-                    .collect(java.util.stream.Collectors.joining("; "));
-
-            // Use HttpClient instead of Jsoup for better control and timeout handling
             java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
                     .connectTimeout(java.time.Duration.ofSeconds(60))
                     .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
                     .build();
 
-            // Encode the payload
-            String encodedPayload = "xmlData="
-                    + java.net.URLEncoder.encode(xmlPayload, "UTF-8")
-                    + "&shortdictionary=" + java.net.URLEncoder.encode("", "UTF-8")
-                    + "&targetPageCode="
-                    + java.net.URLEncoder.encode("UnitedPurchaseList", "UTF-8")
-                    + "&orgId=" + java.net.URLEncoder.encode("0", "UTF-8")
-                    + "&PID=" + java.net.URLEncoder.encode("0", "UTF-8");
-
+            // Прогрев ради cookies больше НЕ нужен: эндпоинт отвечает на «холодный» POST
+            // (проверено 25.08.2026). Раньше первым шагом дёргался UnitedPurchaseList.aspx —
+            // именно он начал отдавать 404 и ронял весь парсинг.
             java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
                     .uri(java.net.URI.create(API_URL))
-                    .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-                    .header("User-Agent",
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-                    .header("Accept", "application/json, text/javascript, */*; q=0.01")
+                    .header("Content-Type", "application/json")
+                    .header("User-Agent", USER_AGENT)
+                    .header("Accept", "application/json, text/plain, */*")
                     .header("X-Requested-With", "XMLHttpRequest")
-                    .header("Cookie", cookieHeader)
-                    .header("Referer", BASE_URL + "/UnitedPurchaseList.aspx")
+                    .header("Referer", BASE_URL + LIST_PAGE)
                     .header("Origin", BASE_URL)
-                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(encodedPayload))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(
+                            payload, java.nio.charset.StandardCharsets.UTF_8))
                     .timeout(java.time.Duration.ofMinutes(5))
                     .build();
 
-            log.info("Sending SberAst API request...");
+            log.info("Sending SberAst API request (pageSize={})...", pageSize);
             java.net.http.HttpResponse<String> response = client.send(request,
-                    java.net.http.HttpResponse.BodyHandlers.ofString());
+                    java.net.http.HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));
 
             int statusCode = response.statusCode();
             String jsonResponse = response.body();
-            log.info("SberAst API response: status={}, body={}", statusCode, jsonResponse);
-            log.debug("API response (first 500 chars): {}",
-                    jsonResponse.substring(0, Math.min(500, jsonResponse.length())));
+            log.info("SberAst API response: status={}, length={}", statusCode, jsonResponse.length());
 
-            // Парсим JSON ответ
+            if (statusCode != 200) {
+                log.error("SberAst API вернул HTTP {} — начало тела: {}", statusCode,
+                        jsonResponse.substring(0, Math.min(500, jsonResponse.length())));
+                return procurements;
+            }
+
             JsonObject responseJson = JsonParser.parseString(jsonResponse).getAsJsonObject();
-            log.debug("Response JSON keys: {}", responseJson.keySet());
-
-            // Проверяем наличие поля result
-            if (responseJson.has("result")) {
-                String resultValue = responseJson.get("result").getAsString();
-                log.info("API result field: '{}'", resultValue);
-
-                if (!"success".equals(resultValue)) {
-                    log.error("API returned result='{}' (expected 'success')", resultValue);
-                    if (responseJson.has("message")) {
-                        log.error("API error message: {}", responseJson.get("message").getAsString());
-                    }
-                    log.error("Full API response: {}", jsonResponse);
-                    return procurements;
-                }
-            } else {
-                log.error("API response missing 'result' field. Keys present: {}", responseJson.keySet());
-                log.error("Full API response: {}", jsonResponse);
-                return procurements;
-            }
-
-            // Извлекаем вложенный JSON из поля "data"
-            if (!responseJson.has("data")) {
-                log.warn("No data field in API response");
-                return procurements;
-            }
-
-            String dataString = responseJson.get("data").getAsString();
-            log.info("Data string length: {}, first 500 chars: {}", dataString.length(),
-                    dataString.substring(0, Math.min(500, dataString.length())));
-
-            JsonObject dataJson = JsonParser.parseString(dataString).getAsJsonObject();
-            log.info("Data JSON keys: {}", dataJson.keySet());
-
-            // Проверяем структуру ответа - данные могут быть в поле "data" или "tableXml"
-            JsonArray hits = null;
-
-            // Вариант 1: Пробуем извлечь из вложенного поля "data" (JSON)
-            if (dataJson.has("data") && !dataJson.get("data").isJsonNull()) {
-                try {
-                    String innerDataString = dataJson.get("data").getAsString();
-                    log.info("Found inner 'data' field, length: {}, first 300 chars: {}",
-                            innerDataString.length(),
-                            innerDataString.substring(0, Math.min(300, innerDataString.length())));
-
-                    JsonObject innerDataJson = JsonParser.parseString(innerDataString).getAsJsonObject();
-                    log.info("Inner data JSON keys: {}", innerDataJson.keySet());
-
-                    if (innerDataJson.has("hits") && innerDataJson.getAsJsonObject("hits").has("hits")) {
-                        hits = innerDataJson.getAsJsonObject("hits").getAsJsonArray("hits");
-                        log.info("Found hits in inner data field");
-                    }
-                } catch (Exception e) {
-                    log.debug("Failed to parse inner data field as JSON: {}", e.getMessage());
-                }
-            }
-
-            // Вариант 2: Если не нашли в "data", пробуем прямо в основном JSON
-            if (hits == null && dataJson.has("hits") && dataJson.getAsJsonObject("hits").has("hits")) {
-                hits = dataJson.getAsJsonObject("hits").getAsJsonArray("hits");
-                log.info("Found hits in main data field");
-            }
-
+            JsonArray hits = extractHits(responseJson);
             if (hits == null) {
-                log.warn("No hits found in any known location");
-                log.warn("Available keys in data JSON: {}", dataJson.keySet());
+                log.error("SberAst: список лотов не найден в ответе. Ключи верхнего уровня: {}",
+                        responseJson.keySet());
                 return procurements;
             }
-            log.info("Found {} lots in SberAst API response", hits.size());
+            log.info("Found {} lots in SberAst API response (Total={})", hits.size(),
+                    responseJson.has("Total") ? responseJson.get("Total").toString() : "?");
 
             DatabaseManager db = checkDuplicates ? AppContext.getDatabaseManager() : null;
 
@@ -248,67 +178,60 @@ public class SberAstParser {
     }
 
     /**
-     * Формирует XML запрос для ElasticSearch API
+     * Собирает тело запроса к новому API площадки.
+     *
+     * Формат (снят с живой страницы 25.08.2026): JSON-обёртка, внутри которой фильтр — XML-строка.
+     * ВАЖНО: имена фильтров в XML — camelCase (regionNameTerm, purchaseStageTerm, sourceTerm).
+     * PascalCase-варианты (RegionNameTerm и т.п.) молча ИГНОРИРУЮТСЯ — запрос отработает, но
+     * вернёт всю Россию. Несколько значений одного фильтра разделяются "|;|".
+     *
+     * Фильтры те же, что были согласованы для старого API:
+     *   регион   — «г Севастополь» + «Севастополь» (в справочнике площадки это два разных значения);
+     *   источник — «Приватизация, аренда и продажа прав» + «Реализация имущества».
+     *
+     * ЭТАП здесь НЕ фильтруется, и это осознанно. В новом API фильтр называется
+     * purchStateNameTerm, а прежних значений «Подача заявок»/«Опубликовано» больше не
+     * существует — по агрегации ответа статусы такие: «Многолотовая процедура» (775),
+     * «Отменен(-а)» (19), «Завершен(-а)» (5), «Прием заявок» (3). Фильтровать по «Прием
+     * заявок» нельзя — потеряем недвижимость внутри многолотовых процедур. Поэтому отсев
+     * закрытых процедур делает isFinishedOrExpired() по объективным признакам: статус и срок.
      */
+    private String buildRequestBody(int pageSize) {
+        String filterBody = "<query>"
+                + "<targetPageCode>" + TARGET_PAGE_CODE + "</targetPageCode>"
+                + "<pagesize>" + pageSize + "</pagesize>"
+                + "<pagenum>0</pagenum>"
+                + "<sortOrder>desc</sortOrder>"
+                + "<searchBarType>anyWord</searchBarType>"
+                + "<regionNameTerm>г Севастополь|;|Севастополь</regionNameTerm>"
+                + "<sourceTerm>Приватизация, аренда и продажа прав|;|Реализация имущества</sourceTerm>"
+                + "</query>";
+
+        // Собираем через Gson, чтобы кавычки и кириллица экранировались корректно
+        JsonObject body = new JsonObject();
+        body.addProperty("windowCode", WINDOW_CODE);
+        body.addProperty("actionType", "MONITOR");
+        body.addProperty("actionCode", "default");
+        body.addProperty("documentBody", "");
+        body.addProperty("parm", "es");
+        body.addProperty("filterBody", filterBody);
+        body.add("options", new JsonObject());
+        return body.toString();
+    }
+
     /**
-     * Формирует XML запрос для ElasticSearch API
+     * Достаёт массив лотов из ответа. Новый API кладёт их в "PurchaseList",
+     * запасной путь — классическая ES-обёртка hits.hits (на случай отката площадки).
      */
-    private String buildElasticSearchRequest(int size) {
-        // XML payload reverse-engineered from browser cURL
-        return "<elasticrequest>" +
-                "<personid>0</personid>" +
-                "<buid>0</buid>" +
-                "<filters>" +
-                "<mainSearchBar><value></value><type>phrase_prefix</type><minimum_should_match>100%</minimum_should_match></mainSearchBar>"
-                +
-                "<purchAmount><minvalue></minvalue><maxvalue></maxvalue></purchAmount>" +
-                "<PublicDate><minvalue></minvalue><maxvalue></maxvalue></PublicDate>" +
-                "<PurchaseStageTerm><value>Подача заявок|;|Опубликовано</value><visiblepart>Подача заявок,Опубликовано</visiblepart></PurchaseStageTerm>"
-                +
-                "<SourceTerm><value>Приватизация, аренда и продажа прав|;|Реализация имущества|;|Торги коммерческих заказчиков</value><visiblepart>Приватизация, аренда и продажа прав,Реализация иму...</visiblepart></SourceTerm>"
-                +
-                "<RegionNameTerm><value>г Севастополь|;|Севастополь</value><visiblepart>г Севастополь,Севастополь</visiblepart></RegionNameTerm>"
-                +
-                "<RequestStartDate><minvalue></minvalue><maxvalue></maxvalue></RequestStartDate>" +
-                "<RequestDate><minvalue></minvalue><maxvalue></maxvalue></RequestDate>" +
-                "<AuctionBeginDate><minvalue></minvalue><maxvalue></maxvalue></AuctionBeginDate>" +
-                "<okdp2MultiMatch><value></value></okdp2MultiMatch>" +
-                "<okdp2tree><value></value><productField></productField><branchField></branchField></okdp2tree>" +
-                "<classifier><visiblepart></visiblepart></classifier>" +
-                "<orgCondition><value></value></orgCondition>" +
-                "<orgDictionary><value></value></orgDictionary>" +
-                "<organizator><visiblepart></visiblepart></organizator>" +
-                "<CustomerCondition><value></value></CustomerCondition>" +
-                "<CustomerDictionary><value></value></CustomerDictionary>" +
-                "<customer><visiblepart></visiblepart></customer>" +
-                "<PurchaseWayTerm><value></value><visiblepart></visiblepart></PurchaseWayTerm>" +
-                "<PurchaseTypeNameTerm><value></value><visiblepart></visiblepart></PurchaseTypeNameTerm>" +
-                "<BranchNameTerm><value></value><visiblepart></visiblepart></BranchNameTerm>" +
-                "<isSharedTerm><value></value><visiblepart></visiblepart></isSharedTerm>" +
-                "<isHasComplaint><value></value></isHasComplaint>" +
-                "<isPurchCostDetails><value></value></isPurchCostDetails>" +
-                "<notificationFeatures><value></value><visiblepart></visiblepart></notificationFeatures>" +
-                "</filters>" +
-                "<fields>" +
-                "<field>TradeSectionId</field><field>purchAmount</field><field>purchCurrency</field><field>purchCodeTerm</field>"
-                +
-                "<field>PurchaseTypeName</field><field>purchStateName</field><field>BidStatusName</field><field>OrgName</field>"
-                +
-                "<field>SourceTerm</field><field>PublicDate</field><field>RequestDate</field><field>RequestStartDate</field>"
-                +
-                "<field>RequestAcceptDate</field><field>EndDate</field><field>CreateRequestHrefTerm</field><field>CreateRequestAlowed</field>"
-                +
-                "<field>purchName</field><field>BidName</field><field>SourceHrefTerm</field><field>objectHrefTerm</field>"
-                +
-                "<field>needPayment</field><field>IsSMP</field><field>isIncrease</field><field>isHasComplaint</field>" +
-                "<field>isPurchCostDetails</field><field>purchType</field>" +
-                "</fields>" +
-                "<sort><value>default</value><direction></direction></sort>" +
-                "<aggregations><empty><filterType>filter_aggregation</filterType><field></field></empty></aggregations>"
-                +
-                "<size>" + size + "</size>" +
-                "<from>0</from>" +
-                "</elasticrequest>";
+    private JsonArray extractHits(JsonObject root) {
+        if (root.has("PurchaseList") && root.get("PurchaseList").isJsonArray()) {
+            return root.getAsJsonArray("PurchaseList");
+        }
+        if (root.has("hits") && root.get("hits").isJsonObject()
+                && root.getAsJsonObject("hits").has("hits")) {
+            return root.getAsJsonObject("hits").getAsJsonArray("hits");
+        }
+        return null;
     }
 
     /**
@@ -329,10 +252,27 @@ public class SberAstParser {
             // Извлекаем название закупки (purchName)
             String purchName = getJsonString(source, "purchName");
 
-            // Формируем полное название (BidName + purchName)
-            String title = bidName != null ? bidName : "";
-            if (purchName != null && !purchName.isEmpty()) {
-                title = title.isEmpty() ? purchName : title + " - " + purchName;
+            // Формируем полное название (BidName + purchName).
+            // ВАЖНО: у Сбербанк-АСТ эти поля часто ДУБЛИРУЮТ друг друга — у лота
+            // SBR012-2608180036.1 оба содержали один и тот же текст, и карточка уходила
+            // в канал с описанием, повторённым дважды через " - ". Поэтому склеиваем
+            // только когда тексты реально разные и ни один не входит в другой целиком.
+            String title = bidName != null ? bidName.trim() : "";
+            String purch = purchName != null ? purchName.trim() : "";
+            if (!purch.isEmpty()) {
+                if (title.isEmpty()) {
+                    title = purch;
+                } else {
+                    String a = normalizeForCompare(title);
+                    String b = normalizeForCompare(purch);
+                    if (a.contains(b)) {
+                        // purchName ничего не добавляет — оставляем BidName как есть
+                    } else if (b.contains(a)) {
+                        title = purch; // purchName полнее — берём его
+                    } else {
+                        title = title + " - " + purch;
+                    }
+                }
             }
 
             if (title.isEmpty()) {
@@ -355,8 +295,13 @@ public class SberAstParser {
             // Тип закупки (PurchaseTypeName)
             String purchaseType = getJsonString(source, "PurchaseTypeName");
 
-            // Статус заявки (BidStatusName)
-            String bidStatus = getJsonString(source, "BidStatusName");
+            // Статус процедуры. В ответе нового API поля BidStatusName больше нет —
+            // берём purchStateName («Прием заявок», «Многолотовая процедура» и т.п.),
+            // с откатом на PurchaseStageTerm.
+            String bidStatus = getJsonString(source, "purchStateName");
+            if (bidStatus == null || bidStatus.isEmpty()) {
+                bidStatus = getJsonString(source, "PurchaseStageTerm");
+            }
 
             // Организация (OrgName)
             String orgName = getJsonString(source, "OrgName");
@@ -385,7 +330,7 @@ public class SberAstParser {
                     .deadline(deadline)
                     .area(area)
                     .price(price)
-                    .imageUrls(new ArrayList<>())
+                    .imageUrls(new ArrayList<>(java.util.List.of(DEFAULT_IMAGE_PATH)))
                     .source("sberbank-ast.ru")
                     .build();
 
@@ -446,6 +391,44 @@ public class SberAstParser {
         return null;
     }
 
+    // Статусы процедур, означающие, что раунд торгов уже закончился.
+    private static final List<String> DEAD_STATE_MARKERS = List.of("отменен", "завершен", "не состоял");
+
+    /**
+     * true, если процедура закрыта (по статусу) либо срок подачи заявок уже прошёл.
+     * Статус лежит в biddTypeName (туда кладём purchStateName), срок — в deadline (ISO).
+     */
+    private boolean isFinishedOrExpired(Procurement p) {
+        String state = p.getBiddTypeName();
+        if (state != null && !state.isEmpty()) {
+            String st = state.toLowerCase();
+            for (String marker : DEAD_STATE_MARKERS) {
+                if (st.contains(marker)) {
+                    return true;
+                }
+            }
+        }
+        String deadline = p.getDeadline();
+        if (deadline != null && !deadline.isEmpty()) {
+            try {
+                return java.time.OffsetDateTime.parse(deadline).toInstant()
+                        .isBefore(java.time.Instant.now());
+            } catch (Exception ignore) {
+                // непарсящийся срок не считаем прошедшим — пусть решают остальные фильтры
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Нормализует строку для сравнения заголовков: нижний регистр + схлопнутые пробелы.
+     * Нужно потому, что в текстах Сбербанк-АСТ встречаются двойные пробелы, из-за которых
+     * буквально одинаковые заголовки не совпадали бы при прямом equals.
+     */
+    private String normalizeForCompare(String s) {
+        return s == null ? "" : s.toLowerCase().replaceAll("\\s+", " ").trim();
+    }
+
     /**
      * Безопасно извлекает строковое значение из JSON
      */
@@ -478,13 +461,15 @@ public class SberAstParser {
             return null;
         }
         try {
-            // Извлекаем только дату (до пробела)
+            // Извлекаем только дату (до пробела) и храним в ISO с оффсетом, как torgi.
+            // ВАЖНО: НЕ «dd-MM-yyyy» — cleanupExpiredRecords сравнивает substr(deadline,1,10)
+            // строкой с date('now','-90 days'); при dd-MM-yyyy лот ложно «устаревает» → удаляется →
+            // переспавнивается → публикуется повторно (регрессия, была у ЦДТРФ). Карточку в
+            // dd-MM-yyyy отрендерит сам sendProcurementMessage через OffsetDateTime.parse.
             String datePart = dateStr.split(" ")[0];
-            // Конвертируем из dd.MM.yyyy в dd-MM-yyyy
-            SimpleDateFormat inputFormat = new SimpleDateFormat("dd.MM.yyyy");
-            SimpleDateFormat outputFormat = new SimpleDateFormat("dd-MM-yyyy");
-            Date date = inputFormat.parse(datePart);
-            return outputFormat.format(date);
+            java.time.LocalDate d = java.time.LocalDate.parse(datePart,
+                    java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"));
+            return d.atStartOfDay().atOffset(java.time.ZoneOffset.ofHours(3)).toString();
         } catch (Exception e) {
             log.debug("Failed to format date: {}", dateStr);
             return dateStr;
@@ -762,6 +747,15 @@ public class SberAstParser {
     private boolean matchesFilters(Procurement procurement) {
         String title = procurement.getTitle();
         String address = procurement.getAddress();
+
+        // Отсекаем закрытые процедуры и лоты с истёкшим сроком подачи. Нужно потому, что
+        // запрос к площадке этап не фильтрует (см. buildRequestBody) и в выдачу попадает
+        // архив — при первом прогоне нового парсера туда затесались лоты 2024 года.
+        if (isFinishedOrExpired(procurement)) {
+            log.debug("Лот {} отсеян: процедура закрыта или срок истёк (статус={}, дедлайн={})",
+                    procurement.getNumber(), procurement.getBiddTypeName(), procurement.getDeadline());
+            return false;
+        }
 
         // Проверяем регион (Севастополь) - должен быть уже отфильтрован на уровне API
         String addressLower = address != null ? address.toLowerCase() : "";

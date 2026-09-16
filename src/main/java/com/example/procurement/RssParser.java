@@ -31,10 +31,17 @@ public class RssParser {
 
     private final ParsingSource source;
     private final LotFilter lotFilter;
+    // Лоты с неопределённой пригодностью (ни include, ни exclude) — кандидаты на ревью админами
+    private final List<Procurement> noMatchLots = new ArrayList<>();
 
     public RssParser(ParsingSource source) {
         this.source = source;
         this.lotFilter = LotFilter.createDefault();
+    }
+
+    /** Возвращает no-match лоты, собранные за последний прогон parseUntilEnough. */
+    public List<Procurement> getNoMatchLots() {
+        return noMatchLots;
     }
 
     /**
@@ -77,6 +84,7 @@ public class RssParser {
     public List<Procurement> parseUntilEnough(final int maxCount, final boolean notifyAdminOnNoMatch) {
         List<Procurement> procurements = new ArrayList<>();
         Set<String> seenNumbers = new java.util.HashSet<>();
+        noMatchLots.clear();
         log.info("Starting RSS parsing from URL: {}", source.getRssUrl());
         log.info("Max count requested: {}, notify on no match: {}", maxCount, notifyAdminOnNoMatch);
 
@@ -207,10 +215,26 @@ public class RssParser {
                     continue;
                 }
 
-                boolean isSuitable = isRealEstateLot(title, notifyAdminOnNoMatch);
-                if (!isSuitable) {
+                LotFilter.Classification cls = lotFilter.classify(title, null);
+                if (cls == LotFilter.Classification.EXCLUDED) {
                     filteredOutCount++;
-                    log.info("Lot #{} discarded by filter: {}", processedCount, title);
+                    log.info("Lot #{} discarded by filter (excluded): {}", processedCount, title);
+                    continue;
+                }
+                if (cls == LotFilter.Classification.NO_MATCH) {
+                    filteredOutCount++;
+                    // Собираем для ревью админами (обогащение и фильтр по городу — позже, в ParserService)
+                    if (notifyAdminOnNoMatch && number != null && seenNumbers.add(number)) {
+                        noMatchLots.add(Procurement.builder()
+                                .number(number)
+                                .title(title)
+                                .link(link)
+                                .source(source.getName())
+                                .build());
+                        log.info("Lot #{} no-match — собран на ревью админам: {}", processedCount, title);
+                    } else {
+                        log.info("Lot #{} no-match (undetermined), пропущен: {}", processedCount, title);
+                    }
                     continue;
                 }
 
@@ -374,10 +398,24 @@ public class RssParser {
     }
 
     private String extractAddress(String title) {
-        Pattern pattern = Pattern.compile("по адресу:([^,]+)");
+        // Берём весь адрес после «по адресу:» до конца строки, а НЕ до первой запятой.
+        // Иначе для «...по адресу: Российская Федерация, г Севастополь, ...» адрес
+        // обрезался до «Российская Федерация» — без слова «Севастополь», из-за чего
+        // RegionValidator (работает ДО обогащения) считал лот не-севастопольским и слал
+        // админам ложный «❌ Парсинг не удался». Хвост с характеристиками отсекаем.
+        Pattern pattern = Pattern.compile("по адресу:\\s*(.+)$");
         Matcher matcher = pattern.matcher(title);
         if (matcher.find()) {
-            return matcher.group(1).trim();
+            String addr = matcher.group(1).trim();
+            String lower = addr.toLowerCase();
+            for (String tail : new String[] { "общей площадью", "площадью", "кадастров" }) {
+                int idx = lower.indexOf(tail);
+                if (idx > 5) {
+                    addr = addr.substring(0, idx).replaceAll("[,;\\s]+$", "").trim();
+                    break;
+                }
+            }
+            return addr.isEmpty() ? "г. Севастополь" : addr;
         }
         return "г. Севастополь";
     }

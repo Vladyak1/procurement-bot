@@ -69,6 +69,34 @@ public class LotFilter {
     }
 
     /**
+     * Результат классификации лота по ключевым словам.
+     * SUITABLE — подходит (include); EXCLUDED — отсечён (exclude);
+     * NO_MATCH — не определён (ни include, ни exclude) → кандидат на ревью админами.
+     */
+    public enum Classification { SUITABLE, EXCLUDED, NO_MATCH }
+
+    /**
+     * Классифицирует лот по ключевым словам без побочных эффектов (не шлёт уведомлений).
+     */
+    public Classification classify(String title, String address) {
+        String titleLower = title != null ? title.toLowerCase() : "";
+        String addressLower = address != null ? address.toLowerCase() : "";
+        String combined = titleLower + " " + addressLower;
+
+        for (String excludeWord : excludeKeywords) {
+            if (combined.contains(excludeWord.toLowerCase())) {
+                return Classification.EXCLUDED;
+            }
+        }
+        for (String includeWord : includeKeywords) {
+            if (combined.contains(includeWord.toLowerCase())) {
+                return Classification.SUITABLE;
+            }
+        }
+        return Classification.NO_MATCH;
+    }
+
+    /**
      * Упрощенная версия для проверки только заголовка
      */
     public boolean isRealEstateLot(String title) {

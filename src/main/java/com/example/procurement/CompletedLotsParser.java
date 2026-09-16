@@ -17,13 +17,12 @@ import java.util.regex.Pattern;
 import java.util.zip.GZIPInputStream;
 
 /**
- * Парсер для завершенных/неактуальных лотов с torgi.gov.ru
- * Извлекает статусы лотов: Состоялся, Не состоялся, Отменен, Прием заявок приостановлен
+ * Парсер для завершенных/неактуальных лотов с torgi.gov.ru.
+ * Лента даёт список завершившихся лотов, точный статус каждого берётся из его карточки.
  */
 @Slf4j
 public class CompletedLotsParser {
     private static final Pattern NUMBER_PATTERN = Pattern.compile("lot/([\\d:_]+)");
-    private static final Pattern STATUS_PATTERN = Pattern.compile("<b>Статус лота:</b>\\s*([^<]+)<br>");
 
     private final String completedLotsRssUrl;
 
@@ -51,7 +50,7 @@ public class CompletedLotsParser {
         Map<String, String> lotStatuses = new HashMap<>();
         log.info("Starting parsing of completed lots from URL: {}", completedLotsRssUrl);
         if (activeLotNumbers != null) {
-            log.info("Using optimization: will stop when encountering lot not in DB (active lots count: {})", activeLotNumbers.size());
+            log.info("Scanning completed lots RSS for {} active lots from DB", activeLotNumbers.size());
         }
 
         try {
@@ -101,13 +100,10 @@ public class CompletedLotsParser {
 
             int processedCount = 0;
             int statusExtractedCount = 0;
-            int consecutiveNotInDb = 0;
-            final int MAX_CONSECUTIVE_NOT_IN_DB = 5; // Останавливаемся после 5 подряд отсутствующих лотов
 
             for (SyndEntry entry : entries) {
                 processedCount++;
                 String link = entry.getLink();
-                String description = entry.getDescription() != null ? entry.getDescription().getValue() : "";
 
                 if (Config.getParserVerbose()) {
                     log.debug("Processing completed lot #{}: {}", processedCount, entry.getTitle());
@@ -119,33 +115,31 @@ public class CompletedLotsParser {
                     continue;
                 }
 
-                // Оптимизация: если лота нет в списке активных, вероятно дальше только старые лоты
+                // Пропускаем лоты, которых нет в нашем активном списке — они нам не нужны
                 if (activeLotNumbers != null && !activeLotNumbers.contains(number)) {
-                    consecutiveNotInDb++;
-                    if (consecutiveNotInDb >= MAX_CONSECUTIVE_NOT_IN_DB) {
-                        log.info("Found {} consecutive lots not in DB, stopping parsing (optimization)", consecutiveNotInDb);
-                        break;
-                    }
                     if (Config.getParserVerbose()) {
-                        log.debug("Lot {} not in active list, skipping (consecutive: {})", number, consecutiveNotInDb);
+                        log.debug("Lot {} not in active list, skipping", number);
                     }
                     continue;
-                } else {
-                    consecutiveNotInDb = 0; // Сбрасываем счетчик если нашли актуальный лот
                 }
 
-                String status = extractStatus(description);
+                // Статус берём из карточки лота, а НЕ из описания RSS: в поле «Статус лота»
+                // ленты приходит эхо фильтра запроса — буквально «Состоялся, Не состоялся,
+                // Отменен, Прием заявок приостановлен» для каждого элемента. Старый разбор
+                // видел там «не состоялся» и всем подряд проставлял FAILED.
+                // Сама лента остаётся полезной как признак «лот завершился»: запрос к API
+                // делаем только для наших активных лотов, попавших в неё, — это единицы.
+                String status = fetchStatusFromApi(number);
                 if (status != null) {
                     lotStatuses.put(number, status);
                     statusExtractedCount++;
-                    log.debug("Extracted status for lot {}: {}", number, status);
+                    log.info("Статус лота {} из карточки: {}", number, status);
                 } else {
-                    log.debug("No status found for lot {}", number);
+                    log.warn("Не удалось получить статус лота {} из карточки", number);
                 }
             }
 
-            log.info("Completed lots parsing summary: processed={}, status_extracted={}, stopped_early={}",
-                    processedCount, statusExtractedCount, consecutiveNotInDb >= MAX_CONSECUTIVE_NOT_IN_DB);
+            log.info("Completed lots parsing summary: processed={}, status_extracted={}", processedCount, statusExtractedCount);
         } catch (Exception e) {
             log.error("Error parsing completed lots RSS feed from {}: {}", completedLotsRssUrl, e.getMessage(), e);
         }
@@ -169,52 +163,43 @@ public class CompletedLotsParser {
     }
 
     /**
-     * Извлекает статус лота из description RSS-записи
-     * Ищет паттерн: <b>Статус лота:</b> Состоялся<br>
+     * Берёт актуальный статус лота из его карточки в API torgi.
+     * Значения приходят готовыми константами (SUCCEED, FAILED, CANCELED,
+     * APPLICATIONS_SUBMISSION_SUSPENDED), нормализация не нужна.
      *
-     * @param description HTML-описание из RSS
-     * @return Нормализованный статус (SUCCEED, FAILED, CANCELED, SUSPENDED) или null
+     * @return статус либо null, если карточка недоступна — тогда лучше не трогать
+     *         сохранённый статус, чем записать выдуманный
      */
-    private String extractStatus(String description) {
-        if (description == null || description.isEmpty()) {
+    public static String fetchStatusFromApi(String number) {
+        HttpURLConnection conn = null;
+        try {
+            String url = Config.getXhrUrl() + number;
+            conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+            conn.setRequestProperty("Accept", "application/json, text/plain, */*");
+            conn.setRequestProperty("Referer", "https://torgi.gov.ru/new/public/lots/lot/" + number);
+
+            if (conn.getResponseCode() != 200) {
+                log.warn("Карточка лота {}: HTTP {}", number, conn.getResponseCode());
+                return null;
+            }
+            try (InputStream is = getDecodedInputStream(conn)) {
+                com.fasterxml.jackson.databind.JsonNode root =
+                        new com.fasterxml.jackson.databind.ObjectMapper().readTree(is);
+                String status = root.path("lotStatus").asText(null);
+                return (status != null && !status.isEmpty()) ? status : null;
+            }
+        } catch (Exception e) {
+            log.warn("Не удалось прочитать статус лота {}: {}", number, e.getMessage());
             return null;
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
         }
-
-        Matcher matcher = STATUS_PATTERN.matcher(description);
-        if (matcher.find()) {
-            String rawStatus = matcher.group(1).trim();
-            // Нормализуем статус для удобства обработки
-            return normalizeStatus(rawStatus);
-        }
-        return null;
-    }
-
-    /**
-     * Нормализует русский текст статуса в константу
-     *
-     * @param rawStatus Текст статуса на русском языке
-     * @return Нормализованная константа статуса
-     */
-    private String normalizeStatus(String rawStatus) {
-        if (rawStatus == null) {
-            return null;
-        }
-
-        String statusLower = rawStatus.toLowerCase().trim();
-
-        if (statusLower.contains("состоялся") && !statusLower.contains("не состоялся")) {
-            return "SUCCEED";
-        } else if (statusLower.contains("не состоялся")) {
-            return "FAILED";
-        } else if (statusLower.contains("отменен")) {
-            return "CANCELED";
-        } else if (statusLower.contains("приостановлен")) {
-            return "SUSPENDED";
-        }
-
-        // Возвращаем оригинальный текст, если не удалось распознать
-        log.warn("Unknown status format: {}", rawStatus);
-        return rawStatus;
     }
 
     /**
@@ -247,7 +232,7 @@ public class CompletedLotsParser {
     /**
      * Получает декодированный InputStream с учетом Content-Encoding (gzip, deflate)
      */
-    private InputStream getDecodedInputStream(HttpURLConnection conn) throws Exception {
+    private static InputStream getDecodedInputStream(HttpURLConnection conn) throws Exception {
         String encoding = conn.getContentEncoding();
         InputStream is = conn.getInputStream();
 

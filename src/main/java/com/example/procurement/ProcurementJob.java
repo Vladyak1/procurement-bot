@@ -22,11 +22,52 @@ public class ProcurementJob implements Job {
             return;
         }
 
+        // Пауза, поставленная админом командой /stop. Хранится в БД, поэтому переживает
+        // перезапуск контейнера — иначе после рестарта парсинг тихо возобновился бы.
+        DatabaseManager db = AppContext.getDatabaseManager();
+        if (db != null && "true".equals(db.getSetting(PAUSE_KEY, "false"))) {
+            String since = db.getSetting(PAUSE_SINCE_KEY, "");
+            log.warn("Парсинг на паузе (с {}) — прогон пропущен. Снять: /resume в чате админов", since);
+            remindPausedOncePerDay(since);
+            return;
+        }
+
         long chatId = Config.getParseGroupId(); // Публикация в группу парсинга
-        // Парсим все источники: Torgi.gov.ru + Сбербанк-АСТ
-        int published = processingService.parseAndPublishAllSources(Integer.MAX_VALUE, chatId, false);
+        // Парсим все источники: Torgi.gov.ru + Сбербанк-АСТ.
+        // notifyAdminOnNoMatch=true — неопределённые севастопольские лоты идут админам на ревью (кнопки ✅/❌)
+        int published = processingService.parseAndPublishAllSources(Integer.MAX_VALUE, chatId, true);
         
         log.info("Job completed, published {} procurements from all sources", published);
+    }
+
+    public static final String PAUSE_KEY = "parsing_paused";
+    public static final String PAUSE_SINCE_KEY = "parsing_paused_at";
+    public static final String PAUSE_BY_KEY = "parsing_paused_by";
+
+    private static volatile long lastPauseReminderMs = 0L;
+    private static final long PAUSE_REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1000L;
+
+    /**
+     * Раз в сутки напоминает админам, что парсинг стоит на паузе.
+     * Без этого легко забыть выключенного бота и неделю гадать, почему нет лотов.
+     */
+    private void remindPausedOncePerDay(String since) {
+        long now = System.currentTimeMillis();
+        if (now - lastPauseReminderMs < PAUSE_REMINDER_INTERVAL_MS) {
+            return;
+        }
+        lastPauseReminderMs = now;
+        try {
+            TelegramBot bot = AppContext.getBot();
+            if (bot != null) {
+                bot.sendMessageWithRetry(Config.getAdminGroupId(),
+                        "⏸ Напоминание: парсинг на паузе"
+                                + (since.isEmpty() ? "" : " с " + since.substring(0, Math.min(16, since.length())))
+                                + ". Лоты не публикуются. Возобновить: /resume");
+            }
+        } catch (Exception e) {
+            log.warn("Не удалось отправить напоминание о паузе: {}", e.getMessage());
+        }
     }
 
     private static Scheduler scheduler;
@@ -48,12 +89,24 @@ public class ProcurementJob implements Job {
                     .withIdentity("procurementJob", "group1")
                     .build();
 
-            Trigger trigger = TriggerBuilder.newTrigger()
+            // Два прогона по будням: утренний в 10:00 и вечерний в 17:30.
+            // Разными триггерами, а не одним выражением: минуты у запусков отличаются,
+            // и списком часов ("0 0 10,17") это не выражается — получилось бы 17:00.
+            Trigger morningTrigger = TriggerBuilder.newTrigger()
                     .withIdentity("procurementTrigger", "group1")
-                    .withSchedule(CronScheduleBuilder.cronSchedule("0 0 10,18 ? * MON-FRI"))
+                    .withSchedule(CronScheduleBuilder.cronSchedule("0 0 10 ? * MON-FRI"))
                     .build();
 
-            scheduler.scheduleJob(job, trigger);
+            Trigger eveningTrigger = TriggerBuilder.newTrigger()
+                    .withIdentity("procurementTriggerEvening", "group1")
+                    .withSchedule(CronScheduleBuilder.cronSchedule("0 30 17 ? * MON-FRI"))
+                    .forJob(job)
+                    .build();
+
+            scheduler.scheduleJob(job, morningTrigger);
+            scheduler.scheduleJob(eveningTrigger);
+            log.info("Запуски по расписанию: 10:00 и 17:30 (пн-пт, {})",
+                    java.util.TimeZone.getDefault().getID());
             log.info("Scheduler started");
             
             // Добавляем shutdown hook для корректного завершения планировщика

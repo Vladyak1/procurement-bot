@@ -122,7 +122,7 @@ public class LotPageParser {
             procurement.setDeposit(root.path("deposit").asDouble(0) == 0 ? null : root.path("deposit").asDouble());
             // contractTerm из root может быть числом (лет) без единицы, будет переопределён из attributes если там есть
             String rootContractTerm = root.path("contractTerm").asText(null);
-            if (rootContractTerm != null && !rootContractTerm.isEmpty()) {
+            if (rootContractTerm != null && !rootContractTerm.isEmpty() && !"0".equals(rootContractTerm.trim())) {
                 procurement.setContractTerm(rootContractTerm);
             }
             procurement.setDepositRecipientName(root.path("depositRecipientName").asText(null));
@@ -156,6 +156,39 @@ public class LotPageParser {
             log.info("deadline: {}", procurement.getDeadline());
             // Тип торгов
             procurement.setBiddTypeName(root.path("biddType").path("name").asText(null));
+            // Координаты точки (WGS84) — для прямой ссылки на карту с меткой
+            JsonNode pointNode = root.path("point");
+            if (pointNode.isObject()) {
+                double lat = pointNode.path("lat").asDouble(0);
+                double lon = pointNode.path("lon").asDouble(0);
+                if (lat != 0 && lon != 0) {
+                    procurement.setLat(lat);
+                    procurement.setLon(lon);
+                    procurement.setPointSource(Procurement.POINT_SOURCE_TORGI);
+                }
+            }
+            // Уточнением по ЕГРН здесь не занимаемся: обогащение проходят все лоты подряд,
+            // включая давно опубликованные и те, что отсеют фильтры. Координаты запрашиваются
+            // непосредственно перед публикацией — см. TelegramBot.resolveCadastralPoint.
+            // Код субъекта РФ (authoritative для проверки региона; Севастополь = 92)
+            String subjectRfCode = root.path("subjectRFCode").asText(null);
+            if (subjectRfCode != null && !subjectRfCode.isEmpty()) {
+                procurement.setSubjectRfCode(subjectRfCode);
+            }
+            // Категория объекта — для фильтрации недвижимости (allow-list по code)
+            JsonNode categoryNode = root.path("category");
+            if (categoryNode.isObject()) {
+                String catCode = categoryNode.path("code").asText(null);
+                String catName = categoryNode.path("name").asText(null);
+                if (catCode != null && !catCode.isEmpty()) procurement.setCategoryCode(catCode);
+                if (catName != null && !catName.isEmpty()) procurement.setCategoryName(catName);
+            }
+            // Краткое описание объекта — для фильтра движимого имущества по описанию
+            // (напр. "Судно «ПС-379»": в заголовке/адресе слова нет, только здесь)
+            String lotDescription = root.path("lotDescription").asText(null);
+            if (lotDescription != null && !lotDescription.isEmpty()) {
+                procurement.setLotDescription(lotDescription);
+            }
             // contractTypeName и pricePeriod из attributes
             String contractTypeName = procurement.getContractTypeName();
             String pricePeriod = procurement.getPricePeriod();
@@ -192,15 +225,21 @@ public class LotPageParser {
                         if (termValue != null && !termValue.isEmpty()) {
                             try {
                                 int val = Integer.parseInt(termValue.trim());
-                                if (fullName.contains("(лет)")) {
+                                // Единицу определяем по code атрибута, а имя — только запасной вариант:
+                                // torgi уже сменили формат с «Срок действия договора (лет)» на
+                                // «Срок действия договора - лет», из-за чего срок «5 лет» молча
+                                // превращался в «0» (последним затирало нулевое число дней).
+                                String lowerName = fullName.toLowerCase();
+                                if (code.contains("contractYears") || lowerName.contains("лет")) {
                                     termYears = val;
-                                } else if (fullName.contains("(месяцев)")) {
+                                } else if (code.contains("contractMonths") || lowerName.contains("месяц")) {
                                     termMonths = val;
-                                } else if (fullName.contains("(дней)")) {
+                                } else if (code.contains("contractDays") || lowerName.contains("дн")) {
                                     termDays = val;
                                 } else {
-                                    // Неизвестная единица — ставим как есть
-                                    procurement.setContractTerm(termValue);
+                                    // Единица неизвестна: голое число без неё в карточке бессмысленно
+                                    log.warn("Неопознанная единица срока договора у {}: {} = {}",
+                                            procurement.getNumber(), fullName, termValue);
                                 }
                             } catch (NumberFormatException e) {
                                 // Не число (например, текстовое описание) — ставим как есть
@@ -219,8 +258,11 @@ public class LotPageParser {
                 String combined = term.toString().trim();
                 if (!combined.isEmpty()) {
                     procurement.setContractTerm(combined);
+                } else {
+                    // Все компоненты нулевые — срок не задан. Значение из root тут не спасёт:
+                    // там лежит тот же ноль, а «Срок договора: 0» в карточке только путает.
+                    procurement.setContractTerm(null);
                 }
-                // Если все нули — оставляем значение из root (уже установлено выше)
             }
             procurement.setContractTypeName(contractTypeName);
             procurement.setPricePeriod(pricePeriod);

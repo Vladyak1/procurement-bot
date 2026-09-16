@@ -92,9 +92,11 @@ public class TelegramBot extends TelegramLongPollingBot {
         adminCommands.add(new BotCommand("/fullparse", "Принудительный полный парсинг и публикация в чат парсинга"));
         adminCommands.add(new BotCommand("/teststatus", "Тест обновления статуса лота"));
         adminCommands.add(new BotCommand("/testdeadline", "Тест обновления deadline (автоматически берет первый активный лот)"));
-        // TODO: Временно отключены команды для SberAst и ЦДТРФ
-        // adminCommands.add(new BotCommand("/parsesber", "Тестовый парсинг 2 лотов с Сбербанк-АСТ (без записи в БД)"));
-        // adminCommands.add(new BotCommand("/parsebankrot", "Тестовый парсинг 2 лотов с ЦДТРФ (без записи в БД)"));
+        adminCommands.add(new BotCommand("/parsebankrot", "Тест ЦДТРФ: 2 лота в этот чат, без пометки sent"));
+        adminCommands.add(new BotCommand("/parsesber", "Тест Сбербанк-АСТ: 2 лота в этот чат, без пометки sent"));
+        adminCommands.add(new BotCommand("/stop", "Остановить парсинг (пауза, переживает перезапуск)"));
+        adminCommands.add(new BotCommand("/resume", "Возобновить парсинг"));
+        adminCommands.add(new BotCommand("/status", "Состояние бота: пауза, диск, база"));
         adminCommands.add(new BotCommand("/addadmin", "Добавить админа (формат: /addadmin <chatId>)"));
         adminCommands.add(new BotCommand("/removeadmin", "Удалить админа (формат: /removeadmin <chatId>)"));
         try {
@@ -185,6 +187,11 @@ public class TelegramBot extends TelegramLongPollingBot {
                         }
                     }
                 }
+                return;
+            }
+            if (callbackData.startsWith("nm_ok|") || callbackData.startsWith("nm_no|")) {
+                int cbMessageId = update.getCallbackQuery().getMessage().getMessageId();
+                handleNoMatchDecision(callbackData, chatId, cbMessageId, userId);
                 return;
             }
             return;
@@ -307,12 +314,16 @@ public class TelegramBot extends TelegramLongPollingBot {
             boolean isFullParseCmd = msgTextLower.equals("/fullparse") || msgTextLower.equals("/fullparse@sevnto_bot");
             boolean isTestStatusCmd = msgTextLower.equals("/teststatus") || msgTextLower.equals("/teststatus@sevnto_bot");
             boolean isTestDeadlineCmd = msgTextLower.startsWith("/testdeadline") || msgTextLower.startsWith("/testdeadline@sevnto_bot");
-            // TODO: Временно отключены команды для SberAst и ЦДТРФ
-            // boolean isParseSberCmd = msgTextLower.equals("/parsesber") || msgTextLower.equals("/parsesber@sevnto_bot");
-            // boolean isParseBankrotCmd = msgTextLower.equals("/parsebankrot") || msgTextLower.equals("/parsebankrot@sevnto_bot");
+            boolean isParseBankrotCmd = msgTextLower.equals("/parsebankrot") || msgTextLower.equals("/parsebankrot@sevnto_bot");
+            boolean isParseSberCmd = msgTextLower.equals("/parsesber") || msgTextLower.equals("/parsesber@sevnto_bot");
+            boolean isStopCmd = msgTextLower.equals("/stop") || msgTextLower.equals("/stop@sevnto_bot");
+            boolean isResumeCmd = msgTextLower.equals("/resume") || msgTextLower.equals("/resume@sevnto_bot");
+            boolean isStatusCmd = msgTextLower.equals("/status") || msgTextLower.equals("/status@sevnto_bot");
+            boolean isRecheckStatusCmd = msgTextLower.equals("/recheckstatus") || msgTextLower.equals("/recheckstatus@sevnto_bot");
+            boolean isGeocodeCmd = msgTextLower.startsWith("/geocode");
             boolean isAddAdminCmd = msgTextLower.startsWith("/addadmin") || msgTextLower.startsWith("/addadmin@sevnto_bot");
             boolean isRemoveAdminCmd = msgTextLower.startsWith("/removeadmin") || msgTextLower.startsWith("/removeadmin@sevnto_bot");
-            boolean isCommand = isParseCmd || isFullParseCmd || isTestStatusCmd || isTestDeadlineCmd || isAddAdminCmd || isRemoveAdminCmd;
+            boolean isCommand = isParseCmd || isFullParseCmd || isTestStatusCmd || isTestDeadlineCmd || isParseBankrotCmd || isParseSberCmd || isAddAdminCmd || isRemoveAdminCmd;
 
             if (mainText.startsWith("/start lot_") && userId != null) {
                 String lotId = mainText.replace("/start lot_", "");
@@ -364,6 +375,11 @@ public class TelegramBot extends TelegramLongPollingBot {
                 return;
             }
             if (chatId == Config.getAdminGroupId()) {
+                // Ответ на запрос точки: админ присылает ссылку на Яндекс.Карты reply-сообщением
+                if (handlePointReply(chatId, update.getMessage().getReplyToMessage(),
+                        mainText, userIdStr, adminIds)) {
+                    return;
+                }
                 if (isParseCmd) {
                     handleParseCommand(chatId, messageId, userIdStr, adminIds, 2);
                     return;
@@ -376,13 +392,27 @@ public class TelegramBot extends TelegramLongPollingBot {
                 } else if (isTestDeadlineCmd) {
                     handleTestDeadlineCommand(chatId, messageId, mainText, userIdStr, adminIds);
                     return;
-                // TODO: Временно отключены команды для SberAst и ЦДТРФ
-                // } else if (isParseSberCmd) {
-                //     handleParseSberCommand(chatId, messageId, userIdStr, adminIds);
-                //     return;
-                // } else if (isParseBankrotCmd) {
-                //     handleParseBankrotCommand(chatId, messageId, userIdStr, adminIds);
-                //     return;
+                } else if (isParseBankrotCmd) {
+                    handleParseBankrotCommand(chatId, messageId, userIdStr, adminIds, 2);
+                    return;
+                } else if (isParseSberCmd) {
+                    handleParseSberCommand(chatId, messageId, userIdStr, adminIds, 2);
+                    return;
+                } else if (isStopCmd) {
+                    handleStopCommand(chatId, userIdStr, adminIds);
+                    return;
+                } else if (isResumeCmd) {
+                    handleResumeCommand(chatId, userIdStr, adminIds);
+                    return;
+                } else if (isStatusCmd) {
+                    handleStatusCommand(chatId, userIdStr, adminIds);
+                    return;
+                } else if (isRecheckStatusCmd) {
+                    handleRecheckStatusCommand(chatId, userIdStr, adminIds);
+                    return;
+                } else if (isGeocodeCmd) {
+                    handleGeocodeCommand(chatId, mainText, userIdStr, adminIds);
+                    return;
                 } else if (isAddAdminCmd) {
                     handleAddAdminCommand(chatId, mainText, userIdStr, adminIds);
                     return;
@@ -407,6 +437,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     public boolean sendProcurementMessage(long chatId, Procurement procurement) {
+        resolveCadastralPoint(procurement);
         String lotType = "";
         String priceLabel = "";
         boolean isCdtrf = procurement.getSource() != null && procurement.getSource().contains("ЦДТРФ");
@@ -414,7 +445,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         // Для ЦДТРФ используем lotType из парсера
         if (isCdtrf) {
             lotType = procurement.getLotType() != null ? procurement.getLotType() : "Реализация имущества должников";
-            priceLabel = "Цена купли-продажи";
+            priceLabel = "Цена за договор";
         } else if (procurement.getBiddTypeName() != null && procurement.getBiddTypeName().toLowerCase().contains("реализация имущества должников")) {
             lotType = "Реализация имущества должников";
             priceLabel = "Цена за договор";
@@ -482,8 +513,8 @@ public class TelegramBot extends TelegramLongPollingBot {
             // Для ЦДТРФ в contractTerm храним задаток
             if (isCdtrf) {
                 details.append(procurement.getContractTerm()).append("\n");
-            } else if (isRentalContract) {
-                // Срок договора — только для лотов аренды
+            } else if (isRentalContract && isMeaningfulTerm(procurement.getContractTerm())) {
+                // Срок договора — только для лотов аренды и только если он осмысленный
                 details.append("📅Срок договора: ").append(procurement.getContractTerm()).append("\n");
             }
         }
@@ -503,11 +534,11 @@ public class TelegramBot extends TelegramLongPollingBot {
         
         Integer sentMessageId = null;
         boolean lotPublished = false;
-        // Проверяем, есть ли картинки и это не Сбербанк-АСТ (у них нет картинок)
-        boolean hasSberAstSource = procurement.getSource() != null && procurement.getSource().contains("Сбербанк-АСТ");
-        boolean hasCdtrfSource = procurement.getSource() != null && procurement.getSource().contains("ЦДТРФ");
-        
-        if (procurement.getImageUrls() != null && !procurement.getImageUrls().isEmpty() && (!hasSberAstSource || hasCdtrfSource)) {
+        // Картинки публикуем для всех источников. Раньше здесь стояло исключение для
+        // Сбербанк-АСТ (у него нет фото), но оно было мёртвым: сравнивалось с "Сбербанк-АСТ",
+        // а парсер пишет source="sberbank-ast.ru". Теперь SberAst отдаёт картинку-заглушку,
+        // как ЦДТРФ, и отдельное условие не нужно.
+        if (procurement.getImageUrls() != null && !procurement.getImageUrls().isEmpty()) {
             int maxImages = Math.min(4, procurement.getImageUrls().size());
             List<String> urls = procurement.getImageUrls().subList(0, maxImages);
             try {
@@ -567,7 +598,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                         mediaGroup.setChatId(chatId);
                         mediaGroup.setMedias(media);
                         mediaGroup.setDisableNotification(true);
-                        executeWithRetry(mediaGroup); // выбросит исключение → поймает catch ниже
+                        sentMessageId = executeWithRetry(mediaGroup); // выбросит исключение → поймает catch ниже
                         lotPublished = true;
                         log.info("Sent {} images for procurement: {} (downloaded)", media.size(), procurement.getNumber());
                     } else {
@@ -600,27 +631,45 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
 
         // Ссылку на Яндекс.Карты отправляем только если лот был успешно опубликован
-        if (lotPublished && procurement.getAddress() != null && !procurement.getAddress().isEmpty()) {
-            String addressForMap = createOptimizedAddress(procurement.getAddress(), procurement.getCadastralNumber());
-            // Отправляем ссылку только если адрес информативный (не просто город)
-            boolean informative = addressForMap != null && !addressForMap.isEmpty()
-                    && !addressForMap.equalsIgnoreCase("г Севастополь")
-                    && !addressForMap.equalsIgnoreCase("г. Севастополь");
-            if (informative) {
+        if (lotPublished) {
+            String finalUrl = null;
+            boolean hasPoint = procurement.getLat() != null && procurement.getLon() != null;
+            // Координатам верим, если они из ЕГРН (по кадастровому номеру) либо если точка из torgi
+            // не продублирована у лота с другим адресом. Общая точка = адрес организатора,
+            // проставленный один на всё многолотовое извещение, — метка уехала бы в центр города.
+            boolean pointTrusted = hasPoint
+                    && (Procurement.POINT_SOURCE_CADASTRAL.equals(procurement.getPointSource())
+                        || Procurement.POINT_SOURCE_MANUAL.equals(procurement.getPointSource())
+                        || !AppContext.getDatabaseManager().isSharedPoint(
+                                procurement.getLat(), procurement.getLon(), procurement.getAddress()));
+
+            if (pointTrusted) {
+                finalUrl = createYandexMapsPointLink(procurement.getLat(), procurement.getLon());
+            } else if (procurement.getAddress() != null && !procurement.getAddress().isEmpty()) {
+                // Fallback: текстовый геокодер по оптимизированному адресу
+                String addressForMap = createOptimizedAddress(procurement.getAddress(), procurement.getCadastralNumber());
+                boolean informative = addressForMap != null && !addressForMap.isEmpty()
+                        && !addressForMap.equalsIgnoreCase("г Севастополь")
+                        && !addressForMap.equalsIgnoreCase("г. Севастополь");
+                if (informative) {
+                    finalUrl = createYandexMapsShortLink(addressForMap);
+                } else if (hasPoint) {
+                    // Адрес без улицы и дома геокодер не найдёт — сомнительная точка всё же лучше, чем ничего
+                    finalUrl = createYandexMapsPointLink(procurement.getLat(), procurement.getLon());
+                }
+            } else if (hasPoint) {
+                finalUrl = createYandexMapsPointLink(procurement.getLat(), procurement.getLon());
+            }
+            if (finalUrl != null) {
                 try {
-                    String finalUrl = createYandexMapsShortLink(addressForMap);
-                    if (finalUrl != null) {
-                        org.telegram.telegrambots.meta.api.methods.send.SendMessage linkMsg = new org.telegram.telegrambots.meta.api.methods.send.SendMessage();
-                        linkMsg.setChatId(chatId);
-                        linkMsg.setText(finalUrl); // Без Markdown-экранирования
-                        linkMsg.setDisableWebPagePreview(false); // Разрешаем превью
-                        linkMsg.setDisableNotification(true);
-                        executeWithRetry(linkMsg);
-                    } else {
-                        log.warn("Не удалось сгенерировать короткую ссылку на Яндекс карты для адреса: {}", addressForMap);
-                    }
+                    org.telegram.telegrambots.meta.api.methods.send.SendMessage linkMsg = new org.telegram.telegrambots.meta.api.methods.send.SendMessage();
+                    linkMsg.setChatId(chatId);
+                    linkMsg.setText(finalUrl); // Без Markdown-экранирования
+                    linkMsg.setDisableWebPagePreview(false); // Разрешаем превью
+                    linkMsg.setDisableNotification(true);
+                    executeWithRetry(linkMsg);
                 } catch (Exception e) {
-                    log.warn("Не удалось сгенерировать ссылку на Яндекс карты для адреса: {}", addressForMap);
+                    log.warn("Не удалось отправить ссылку на Яндекс карты для лота {}: {}", procurement.getNumber(), e.getMessage());
                 }
             }
         }
@@ -738,7 +787,15 @@ public class TelegramBot extends TelegramLongPollingBot {
 
         Long userId = update.getMessage().getFrom() != null ? update.getMessage().getFrom().getId() : null;
         if (procurementNumber != null) {
-            String lotUrl = "https://torgi.gov.ru/new/public/lots/lot/" + procurementNumber + "/(lotInfo:info)?fromRec=false";
+            // Источник-агностично: берём реальную ссылку лота из БД (torgi/ЦДТРФ/SberAst),
+            // а не собираем torgi-шаблон — иначе для новых источников ссылка будет неверной.
+            String lotUrl = null;
+            Procurement forwarded = AppContext.getDatabaseManager().getProcurementByNumber(procurementNumber);
+            if (forwarded != null && forwarded.getLink() != null && !forwarded.getLink().isEmpty()) {
+                lotUrl = forwarded.getLink();
+            } else {
+                lotUrl = "https://torgi.gov.ru/new/public/lots/lot/" + procurementNumber + "/(lotInfo:info)?fromRec=false";
+            }
             sendMessageWithRetry(chatId, "Ссылка на лот: " + lotUrl);
             log.info("[BOT] Ссылка на лот отправлена: userId={}, lotId={}", userId, procurementNumber);
         } else {
@@ -793,6 +850,164 @@ public class TelegramBot extends TelegramLongPollingBot {
         return message;
     }
 
+    /**
+     * Просит админов проставить точку вручную: бот не смог получить координаты из ЕГРН.
+     * Ответ ожидается reply на это сообщение — ссылкой на Яндекс.Карты.
+     */
+    public void requestPointFromAdmins(Procurement p) {
+        DatabaseManager db = AppContext.getDatabaseManager();
+        if (db == null || db.hasPendingPointRequest(p.getNumber())) {
+            return; // по этому лоту уже спрашивали, второй раз не беспокоим
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("📍 Нужна точка на карте\n\n")
+          .append("Лот: ").append(p.getNumber()).append("\n");
+        if (p.getTitle() != null) {
+            sb.append(p.getTitle().substring(0, Math.min(200, p.getTitle().length()))).append("\n");
+        }
+        if (p.getAddress() != null && !p.getAddress().isEmpty()) {
+            sb.append("Адрес: ").append(p.getAddress()).append("\n");
+        }
+        if (p.getCadastralNumber() != null && !p.getCadastralNumber().isEmpty()) {
+            sb.append("Кадастровый номер: ").append(p.getCadastralNumber()).append("\n");
+        }
+        if (p.getLink() != null) {
+            sb.append(p.getLink()).append("\n");
+        }
+        sb.append("\nКоординаты из ЕГРН получить не удалось, а точка от организатора недостоверна — ")
+          .append("лот не публикуется.\n")
+          .append("Ответьте на это сообщение ссылкой на Яндекс.Карты с нужной точкой — ")
+          .append("бот сразу опубликует лот с ней.");
+        try {
+            org.telegram.telegrambots.meta.api.methods.send.SendMessage msg =
+                    new org.telegram.telegrambots.meta.api.methods.send.SendMessage();
+            msg.setChatId(Config.getAdminGroupId());
+            msg.setText(sb.toString());
+            msg.setDisableWebPagePreview(true);
+            Integer messageId = executeWithRetry(msg);
+            if (messageId != null) {
+                db.savePendingPointRequest(p.getNumber(), messageId, Config.getAdminGroupId());
+                log.info("Запрошена точка у админов по лоту {} (сообщение {})", p.getNumber(), messageId);
+            }
+        } catch (Exception e) {
+            log.warn("Не удалось запросить точку у админов по лоту {}: {}", p.getNumber(), e.getMessage());
+        }
+    }
+
+    /**
+     * Обрабатывает ответ админа со ссылкой на карту: ставит точку и публикует лот.
+     * @return true, если сообщение было ответом на запрос точки (дальше его обрабатывать не нужно)
+     */
+    private boolean handlePointReply(long chatId, org.telegram.telegrambots.meta.api.objects.Message replyTo,
+                                     String text, String userIdStr, List<String> adminIds) {
+        if (replyTo == null || text == null || userIdStr == null || !adminIds.contains(userIdStr)) {
+            return false;
+        }
+        DatabaseManager db = AppContext.getDatabaseManager();
+        String lotNumber = db.getPendingLotByMessage(chatId, replyTo.getMessageId());
+        if (lotNumber == null) {
+            return false;
+        }
+        double[] point = parseYandexMapsLink(text);
+        if (point == null) {
+            sendMessageWithRetry(chatId, "Не разобрал координаты в ссылке. "
+                    + "Нужна ссылка вида https://yandex.ru/maps/?ll=33.45,44.58&z=17&pt=33.45,44.58 — "
+                    + "её даёт «Поделиться» на Яндекс.Картах.");
+            return true;
+        }
+        Procurement p = db.getProcurementByNumber(lotNumber);
+        if (p == null) {
+            sendMessageWithRetry(chatId, "Лот " + lotNumber + " больше не найден в базе.");
+            db.deletePendingPointRequest(lotNumber);
+            return true;
+        }
+        p.setLat(point[0]);
+        p.setLon(point[1]);
+        p.setPointSource(Procurement.POINT_SOURCE_MANUAL);
+        db.updateCoordinates(lotNumber, point[0], point[1], Procurement.POINT_SOURCE_MANUAL);
+        log.info("Админ задал точку для лота {}: {},{}", lotNumber, point[0], point[1]);
+
+        boolean sent = sendProcurementMessage(Config.getParseGroupId(), p);
+        if (sent && db.markAsSent(lotNumber)) {
+            db.clearFiltered(lotNumber);
+            db.deletePendingPointRequest(lotNumber);
+            sendMessageWithRetry(chatId, "✅ Лот " + lotNumber + " опубликован с указанной точкой.");
+        } else {
+            sendMessageWithRetry(chatId, "⚠️ Точку сохранил, но опубликовать лот " + lotNumber
+                    + " не удалось. Попробует следующий прогон.");
+        }
+        return true;
+    }
+
+    /**
+     * Достаёт координаты из ссылки на Яндекс.Карты. Поддерживает форматы, которые реально
+     * отдаёт кнопка «Поделиться»: параметры ll/pt (порядок lon,lat) и whatshere[point].
+     *
+     * @return массив {lat, lon} либо null
+     */
+    static double[] parseYandexMapsLink(String text) {
+        if (text == null) {
+            return null;
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?:pt|ll|whatshere\\[point\\])=(-?\\d+\\.\\d+)(?:,|%2C)(-?\\d+\\.\\d+)")
+                .matcher(text);
+        if (!m.find()) {
+            return null;
+        }
+        try {
+            // Яндекс отдаёт долготу первой
+            double lon = Double.parseDouble(m.group(1));
+            double lat = Double.parseDouble(m.group(2));
+            if (Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+                return null;
+            }
+            return new double[]{lat, lon};
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Подтягивает координаты объекта из ЕГРН по кадастровому номеру — непосредственно перед
+     * публикацией. Раньше это делалось при обогащении каждого лота, но туда попадают и уже
+     * опубликованные, и будущие отсевы фильтров: лишние обращения к НСПД быстро упирались
+     * в ограничение по частоте. Повторно не запрашиваем — у лота уже стоит признак cadastral.
+     */
+    private void resolveCadastralPoint(Procurement procurement) {
+        if (procurement == null
+                || Procurement.POINT_SOURCE_CADASTRAL.equals(procurement.getPointSource())
+                || Procurement.POINT_SOURCE_MANUAL.equals(procurement.getPointSource())) {
+            return;
+        }
+        CadastralGeocoder.Point egrnPoint = CadastralGeocoder.resolve(procurement.getCadastralNumber());
+        if (egrnPoint == null) {
+            return;
+        }
+        procurement.setLat(egrnPoint.getLat());
+        procurement.setLon(egrnPoint.getLon());
+        procurement.setPointSource(Procurement.POINT_SOURCE_CADASTRAL);
+        DatabaseManager db = AppContext.getDatabaseManager();
+        if (db != null) {
+            // Сохраняем, иначе при повторной публикации или правке карточки координаты
+            // пришлось бы запрашивать заново
+            db.updateCoordinates(procurement.getNumber(), egrnPoint.getLat(), egrnPoint.getLon(),
+                    Procurement.POINT_SOURCE_CADASTRAL);
+        }
+    }
+
+    /**
+     * Срок договора пригоден к показу, если это не пусто и не ноль. Организаторы регулярно
+     * заполняют все компоненты срока нулями, а «Срок договора: 0» в карточке только сбивает с толку.
+     */
+    private static boolean isMeaningfulTerm(String term) {
+        if (term == null || term.isBlank()) {
+            return false;
+        }
+        String cleaned = term.trim();
+        return !cleaned.equals("0") && !cleaned.matches("0+([.,]0+)?");
+    }
+
     private Integer executeWithRetry(Object method) throws TelegramApiException {
         int maxRetries = 3;
         int delayMs = 3000;
@@ -802,8 +1017,11 @@ public class TelegramBot extends TelegramLongPollingBot {
                 if (method instanceof SendMessage) {
                     return execute((SendMessage) method).getMessageId();
                 } else if (method instanceof SendMediaGroup) {
-                    execute((SendMediaGroup) method);
-                    return null;
+                    // Подпись лота Telegram кладёт в ПЕРВОЕ сообщение альбома — именно его id нужен,
+                    // чтобы потом дописать в карточку «Аукцион состоялся / не состоялся».
+                    java.util.List<org.telegram.telegrambots.meta.api.objects.Message> sent =
+                            execute((SendMediaGroup) method);
+                    return (sent != null && !sent.isEmpty()) ? sent.get(0).getMessageId() : null;
                 } else if (method instanceof SendPhoto) {
                     return execute((SendPhoto) method).getMessageId();
                 }
@@ -1018,17 +1236,18 @@ public class TelegramBot extends TelegramLongPollingBot {
     /**
      * Парсит и публикует лоты. Использует общий сервис обработки.
      */
-    private int parseAndPublishLots(int maxCount, long chatId, boolean notifyAdminOnNoMatch) {
+    private int parseAndPublishLots(int maxCount, long chatId, boolean notifyAdminOnNoMatch, boolean markSent) {
         ProcurementProcessingService processingService = AppContext.getProcessingService();
-        return processingService.parseAndPublishDefault(maxCount, chatId, notifyAdminOnNoMatch);
+        return processingService.parseAndPublishDefault(maxCount, chatId, notifyAdminOnNoMatch, markSent);
     }
 
     private void handleParseCommand(long chatId, int messageId, String userIdStr, List<String> adminIds, int maxCount) {
         if (userIdStr != null && adminIds.contains(userIdStr)) {
-            sendMessageWithRetry(chatId, "🚀 Запускаю парсинг...");
-            int count = parseAndPublishLots(maxCount, chatId, true);
-            sendMessageWithRetry(chatId, "✅ Парсинг завершён, обработано " + count + " лотов");
-            log.info("Manual parse completed, {} procurements processed", count);
+            sendMessageWithRetry(chatId, "🚀 Тестовый парсинг torgi (в этот чат, без пометки sent)...");
+            // Тест: публикуем в чат запуска, НЕ метим sent → планировщик всё равно выложит лот в канал.
+            int count = parseAndPublishLots(maxCount, chatId, true, false);
+            sendMessageWithRetry(chatId, "✅ Тестовый парсинг torgi завершён: " + count + " лотов");
+            log.info("Manual /parse (torgi test, markSent=false) completed, {} lots", count);
             try {
                 deleteMessage(chatId, messageId);
                 log.info("Deleted /parse message {} in chat {}", messageId, chatId);
@@ -1045,10 +1264,225 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
+    /**
+     * Тестовый парсинг ЦДТРФ: публикует лоты в чат запуска БЕЗ пометки sent
+     * (не «съедает» лоты — планировщик отработает их независимо).
+     */
+    private void handleParseBankrotCommand(long chatId, int messageId, String userIdStr, List<String> adminIds, int maxCount) {
+        if (userIdStr != null && adminIds.contains(userIdStr)) {
+            sendMessageWithRetry(chatId, "🚀 Тест ЦДТРФ (в этот чат, без пометки sent)...");
+            int count = AppContext.getProcessingService().parseAndPublishCdtrf(maxCount, chatId, false);
+            sendMessageWithRetry(chatId, "✅ Тест ЦДТРФ завершён: " + count + " лотов");
+            log.info("Manual /parsebankrot (ЦДТРФ test, markSent=false) completed, {} lots", count);
+        }
+        try {
+            deleteMessage(chatId, messageId);
+        } catch (Exception e) {
+            log.warn("Failed to delete /parsebankrot message: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Тестовый парсинг Сбербанк-АСТ: публикует лоты в чат запуска БЕЗ пометки sent.
+     */
+    private void handleParseSberCommand(long chatId, int messageId, String userIdStr, List<String> adminIds, int maxCount) {
+        if (userIdStr != null && adminIds.contains(userIdStr)) {
+            sendMessageWithRetry(chatId, "🚀 Тест Сбербанк-АСТ (в этот чат, без пометки sent)...");
+            int count = AppContext.getProcessingService().parseAndPublishSberAst(maxCount, chatId, false);
+            sendMessageWithRetry(chatId, "✅ Тест Сбербанк-АСТ завершён: " + count + " лотов");
+            log.info("Manual /parsesber (SberAst test, markSent=false) completed, {} lots", count);
+        }
+        try {
+            deleteMessage(chatId, messageId);
+        } catch (Exception e) {
+            log.warn("Failed to delete /parsesber message: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * /stop — ставит парсинг на паузу. Нужна для случая «бот публикует не то»:
+     * раньше остановить его можно было только через SSH, и до этого момента лоты
+     * продолжали уходить в канал каждым прогоном.
+     * Флаг пишется в БД, поэтому переживает перезапуск контейнера.
+     */
+    private void handleStopCommand(long chatId, String userIdStr, List<String> adminIds) {
+        if (userIdStr == null || !adminIds.contains(userIdStr)) {
+            return;
+        }
+        DatabaseManager db = AppContext.getDatabaseManager();
+        String now = java.time.OffsetDateTime.now().toString();
+        boolean ok = db.setSetting(ProcurementJob.PAUSE_KEY, "true")
+                && db.setSetting(ProcurementJob.PAUSE_SINCE_KEY, now)
+                && db.setSetting(ProcurementJob.PAUSE_BY_KEY, userIdStr);
+        if (ok) {
+            sendMessageWithRetry(chatId, "⏸ Парсинг ОСТАНОВЛЕН." + "\n\n"
+                    + "Плановые прогоны пропускаются, лоты не публикуются." + "\n"
+                    + "Возобновить: /resume");
+            log.warn("Парсинг поставлен на паузу админом {}", userIdStr);
+        } else {
+            sendMessageWithRetry(chatId, "⛔ Не удалось сохранить паузу в базе — проверьте место на диске.");
+            log.error("Не удалось сохранить признак паузы");
+        }
+    }
+
+    /** /resume — снимает паузу парсинга. */
+    private void handleResumeCommand(long chatId, String userIdStr, List<String> adminIds) {
+        if (userIdStr == null || !adminIds.contains(userIdStr)) {
+            return;
+        }
+        DatabaseManager db = AppContext.getDatabaseManager();
+        if (db.setSetting(ProcurementJob.PAUSE_KEY, "false")) {
+            sendMessageWithRetry(chatId, "▶ Парсинг ВОЗОБНОВЛЁН. Ближайший плановый прогон отработает штатно.");
+            log.warn("Пауза парсинга снята админом {}", userIdStr);
+        } else {
+            sendMessageWithRetry(chatId, "⛔ Не удалось снять паузу — проверьте место на диске.");
+        }
+    }
+
+    /** /status — краткое состояние: пауза, место на диске, база, расписание. */
+    /**
+     * Разовая сверка статусов уже опубликованных лотов с карточками torgi.
+     * До 07.09.2026 статус брался из описания RSS, где вместо него приходило эхо фильтра
+     * запроса, и всем лотам подряд проставлялось «Не состоялся». Команда проходит по лотам
+     * с завершённым статусом, спрашивает настоящий и правит и базу, и сообщения в канале.
+     */
+    /**
+     * Проверка связки с НСПД по кадастровому номеру: /geocode 91:02:001017:957
+     * Нужна, чтобы убедиться в работоспособности геокодера, не дожидаясь публикации лота —
+     * новые подходящие лоты появляются далеко не каждый день.
+     */
+    private void handleGeocodeCommand(long chatId, String text, String userIdStr, List<String> adminIds) {
+        if (userIdStr == null || !adminIds.contains(userIdStr)) {
+            return;
+        }
+        String argument = text.replaceAll("(?i)^/geocode(@sevnto_bot)?", "").trim();
+        if (argument.isEmpty()) {
+            sendMessageWithRetry(chatId, "Укажите кадастровый номер: /geocode 91:02:001017:957");
+            return;
+        }
+        DatabaseManager db = AppContext.getDatabaseManager();
+        boolean wasCached = db != null && db.getCadastralPoint(argument) != null;
+
+        long startedAt = System.currentTimeMillis();
+        CadastralGeocoder.Point point = CadastralGeocoder.resolve(argument);
+        long elapsed = System.currentTimeMillis() - startedAt;
+
+        if (point == null) {
+            sendMessageWithRetry(chatId, "❌ НСПД не вернул координат по " + argument
+                    + " (за " + elapsed + " мс). Подробности в логах.");
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("✅ ").append(argument).append("\n")
+          .append("Координаты: ").append(point.getLat()).append(", ").append(point.getLon()).append("\n");
+        if (point.getAddress() != null) {
+            sb.append("Адрес ЕГРН: ").append(point.getAddress()).append("\n");
+        }
+        sb.append("Источник: ").append(wasCached ? "кэш БД" : "запрос к НСПД")
+          .append(" (").append(elapsed).append(" мс)").append("\n")
+          .append(createYandexMapsPointLink(point.getLat(), point.getLon()));
+        sendMessageWithRetry(chatId, sb.toString());
+    }
+
+    private void handleRecheckStatusCommand(long chatId, String userIdStr, List<String> adminIds) {
+        if (userIdStr == null || !adminIds.contains(userIdStr)) {
+            return;
+        }
+        // Выполняем синхронно, как остальные админ-команды: проход по нескольким десяткам
+        // лотов занимает около минуты.
+        DatabaseManager db = AppContext.getDatabaseManager();
+        {
+            List<String> numbers = db.getSentLotsWithFinalStatus();
+            sendMessageWithRetry(chatId, "🔍 Сверяю статусы " + numbers.size() + " лотов с карточками torgi...");
+
+            int fixed = 0;
+            int confirmed = 0;
+            int unavailable = 0;
+            StringBuilder changes = new StringBuilder();
+            for (String number : numbers) {
+                Procurement lot = db.getProcurementByNumber(number);
+                if (lot == null) {
+                    continue;
+                }
+                String realStatus = CompletedLotsParser.fetchStatusFromApi(number);
+                if (realStatus == null) {
+                    unavailable++;
+                    continue;
+                }
+                if (realStatus.equals(lot.getLotStatus())) {
+                    confirmed++;
+                    continue;
+                }
+                db.updateLotStatus(number, realStatus);
+                Procurement updated = db.getProcurementByNumber(number);
+                for (DatabaseManager.MessageMapping mapping : db.getMessageMappings(number)) {
+                    try {
+                        updateProcurementMessage(mapping.chatId, mapping.messageId, updated);
+                    } catch (Exception e) {
+                        log.error("Не удалось поправить сообщение {} для лота {}: {}",
+                                mapping.messageId, number, e.getMessage());
+                    }
+                }
+                fixed++;
+                if (changes.length() < 3000) {
+                    changes.append("• ").append(number).append(": ")
+                           .append(CompletedLotsParser.getStatusDisplayName(lot.getLotStatus()))
+                           .append(" → ").append(CompletedLotsParser.getStatusDisplayName(realStatus)).append("\n");
+                }
+                // torgi не любит частых обращений — идём неспешно
+                try {
+                    Thread.sleep(700);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+
+            StringBuilder result = new StringBuilder();
+            result.append("✅ Сверка завершена\n\n")
+                  .append("Исправлено: ").append(fixed).append("\n")
+                  .append("Подтверждено: ").append(confirmed).append("\n");
+            if (unavailable > 0) {
+                result.append("Карточка недоступна: ").append(unavailable).append("\n");
+            }
+            if (changes.length() > 0) {
+                result.append("\n").append(changes);
+            }
+            sendMessageWithRetry(chatId, result.toString());
+        }
+    }
+
+    private void handleStatusCommand(long chatId, String userIdStr, List<String> adminIds) {
+        if (userIdStr == null || !adminIds.contains(userIdStr)) {
+            return;
+        }
+        try {
+            DatabaseManager db = AppContext.getDatabaseManager();
+            boolean paused = "true".equals(db.getSetting(ProcurementJob.PAUSE_KEY, "false"));
+            String since = db.getSetting(ProcurementJob.PAUSE_SINCE_KEY, "");
+            long freeMb = db.getFreeDiskSpace() / (1024 * 1024);
+
+            StringBuilder sb = new StringBuilder();
+            sb.append(paused ? "⏸ Парсинг: НА ПАУЗЕ" : "▶ Парсинг: работает");
+            if (paused && !since.isEmpty()) {
+                sb.append(" (с ").append(since, 0, Math.min(16, since.length())).append(")");
+            }
+            sb.append("\n");
+            sb.append("Свободно на диске: ").append(freeMb >= 0 ? freeMb + " МБ" : "неизвестно").append("\n");
+            sb.append("Расписание: 10:00 и 17:30 (пн-пт)").append("\n\n");
+            sb.append("Лоты в базе: ").append(db.getTotalProcurementsCount()).append("\n");
+            sb.append("Ждут публикации: ").append(db.getUnsentProcurementsCount());
+            sendMessageWithRetry(chatId, sb.toString());
+        } catch (Exception e) {
+            log.warn("Ошибка команды /status: {}", e.getMessage());
+            sendMessageWithRetry(chatId, "Не удалось собрать статус: " + e.getMessage());
+        }
+    }
+
     private void handleFullParseCommand(long chatId, int messageId, String userIdStr, List<String> adminIds) {
         if (userIdStr != null && adminIds.contains(userIdStr)) {
             sendMessageWithRetry(chatId, "🚀 Запускаю полный парсинг в чат парсинга...");
-            int count = parseAndPublishLots(Integer.MAX_VALUE, Config.getParseGroupId(), true);
+            int count = parseAndPublishLots(Integer.MAX_VALUE, Config.getParseGroupId(), true, true);
             sendMessageWithRetry(chatId, "✅ Полный парсинг завершён, обработано " + count + " лотов");
             log.info("Full parse completed, {} procurements processed", count);
             try {
@@ -1447,6 +1881,21 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     /**
+     * Создает короткую ссылку на Яндекс.Карты с точной меткой по координатам (WGS84).
+     * Яндекс использует порядок параметров lon,lat.
+     */
+    private String createYandexMapsPointLink(double lat, double lon) {
+        try {
+            String yandexUrl = "https://yandex.ru/maps/?ll=" + lon + "%2C" + lat
+                    + "&z=17&pt=" + lon + "%2C" + lat;
+            return shortenWithClck(yandexUrl);
+        } catch (Exception e) {
+            log.warn("Ошибка при создании ссылки по координатам {},{}: {}", lat, lon, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Тестовая команда для проверки обновления статуса лота
      * Берет первый лот из второй RSS-ленты, публикует его, затем обновляет статус
      */
@@ -1666,7 +2115,7 @@ public class TelegramBot extends TelegramLongPollingBot {
 
         if (isCdtrf) {
             lotType = procurement.getLotType() != null ? procurement.getLotType() : "Реализация имущества должников";
-            priceLabel = "Цена купли-продажи";
+            priceLabel = "Цена за договор";
         } else if (procurement.getBiddTypeName() != null && procurement.getBiddTypeName().toLowerCase().contains("реализация имущества должников")) {
             lotType = "Реализация имущества должников";
             priceLabel = "Цена за договор";
@@ -1724,8 +2173,8 @@ public class TelegramBot extends TelegramLongPollingBot {
         if (procurement.getContractTerm() != null) {
             if (isCdtrf) {
                 details.append(procurement.getContractTerm()).append("\n");
-            } else if (isRentalContract) {
-                // Срок договора — только для лотов аренды
+            } else if (isRentalContract && isMeaningfulTerm(procurement.getContractTerm())) {
+                // Срок договора — только для лотов аренды и только если он осмысленный
                 details.append("📅Срок договора: ").append(procurement.getContractTerm()).append("\n");
             }
         }
@@ -1780,6 +2229,108 @@ public class TelegramBot extends TelegramLongPollingBot {
                 return false;
             }
         }
+    }
+
+    /**
+     * Отправляет no-match лот админам на ревью со ссылкой, описанием и кнопками ✅/❌.
+     */
+    public void sendNoMatchLotForReview(Procurement p) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("❓ <b>Не удалось определить пригодность лота</b>\n\n");
+        if (p.getTitle() != null && !p.getTitle().isEmpty()) {
+            sb.append("<b>").append(htmlEscape(p.getTitle())).append("</b>\n\n");
+        }
+        if (p.getLotDescription() != null && !p.getLotDescription().isEmpty()) {
+            sb.append("Описание: ").append(htmlEscape(p.getLotDescription())).append("\n");
+        }
+        if (p.getAddress() != null && !p.getAddress().isEmpty()) {
+            sb.append("Адрес: ").append(htmlEscape(p.getAddress())).append("\n");
+        }
+        String link = p.getLink() != null && !p.getLink().isEmpty()
+                ? p.getLink()
+                : "https://torgi.gov.ru/new/public/lots/lot/" + p.getNumber() + "/(lotInfo:info)?fromRec=false";
+        sb.append("\n<a href=\"").append(link).append("\">Открыть лот на torgi.gov.ru</a>");
+
+        InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        List<InlineKeyboardButton> row = new ArrayList<>();
+        InlineKeyboardButton ok = new InlineKeyboardButton();
+        ok.setText("✅ Опубликовать");
+        ok.setCallbackData("nm_ok|" + p.getNumber());
+        InlineKeyboardButton no = new InlineKeyboardButton();
+        no.setText("❌ Отклонить");
+        no.setCallbackData("nm_no|" + p.getNumber());
+        row.add(ok);
+        row.add(no);
+        rows.add(row);
+        markup.setKeyboard(rows);
+
+        SendMessage msg = new SendMessage();
+        msg.setChatId(Config.getAdminGroupId());
+        msg.setText(sb.toString());
+        msg.setParseMode("HTML");
+        msg.setDisableWebPagePreview(true);
+        msg.setReplyMarkup(markup);
+        try {
+            executeWithRetry(msg);
+        } catch (Exception e) {
+            log.error("Не удалось отправить no-match лот {} на ревью: {}", p.getNumber(), e.getMessage());
+        }
+    }
+
+    /**
+     * Обрабатывает решение админа по no-match лоту (кнопки ✅/❌).
+     */
+    private void handleNoMatchDecision(String callbackData, long chatId, int messageId, Long userId) {
+        String[] parts = callbackData.split("\\|", 2);
+        if (parts.length != 2) {
+            return;
+        }
+        String action = parts[0];
+        String number = parts[1];
+
+        if ("nm_no".equals(action)) {
+            clearInlineKeyboard(chatId, messageId);
+            sendMessageWithRetry(chatId, "❌ Лот " + number + " отклонён.");
+            log.info("No-match лот {} отклонён админом {}", number, userId);
+            return;
+        }
+
+        // nm_ok → публикуем
+        clearInlineKeyboard(chatId, messageId);
+        sendMessageWithRetry(chatId, "⏳ Публикую лот " + number + "...");
+        try {
+            boolean published = AppContext.getProcessingService().publishSingleLotByNumber(number);
+            if (published) {
+                sendMessageWithRetry(chatId, "✅ Лот " + number + " одобрен и опубликован.");
+                log.info("No-match лот {} одобрен и опубликован админом {}", number, userId);
+            } else {
+                sendMessageWithRetry(chatId, "⚠️ Лот " + number + " не опубликован (не из Севастополя, без фото или ошибка). См. логи.");
+            }
+        } catch (Exception e) {
+            log.error("Ошибка публикации одобренного лота {}: {}", number, e.getMessage(), e);
+            sendMessageWithRetry(chatId, "⚠️ Ошибка публикации лота " + number + ": " + e.getMessage());
+        }
+    }
+
+    /** Убирает inline-кнопки у сообщения (после решения админа). */
+    private void clearInlineKeyboard(long chatId, int messageId) {
+        try {
+            org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageReplyMarkup edit =
+                    new org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageReplyMarkup();
+            edit.setChatId(String.valueOf(chatId));
+            edit.setMessageId(messageId);
+            edit.setReplyMarkup(null);
+            execute(edit);
+        } catch (Exception e) {
+            log.debug("Не удалось убрать кнопки у сообщения {}: {}", messageId, e.getMessage());
+        }
+    }
+
+    /** Экранирует спецсимволы HTML для Telegram parse_mode=HTML. */
+    private static String htmlEscape(String s) {
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     /**
