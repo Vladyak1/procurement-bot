@@ -62,3 +62,11 @@ Thumbs.db
 application.properties.backup
 application-prod.properties
 application-local.properties
+
+# Служебные заметки о сервере: адрес, хостер, способы входа. Репозиторий публичный.
+SERVER_INFO.md
+TROUBLESHOOTING.md
+
+# Локальные утилиты под конкретную машину (жёсткие пути, запуск вне Docker)
+check-and-stop.bat
+compile.bat

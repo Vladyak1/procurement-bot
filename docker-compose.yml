@@ -12,5 +12,25 @@ services:
     env_file:
       - .env
     environment:
-      - JAVA_OPTS=-Dfile.encoding=UTF-8 -Duser.timezone=Europe/Moscow
+      # AIA-автоподтягивание промежуточного CA при ротации Russian Trusted Sub CA (torgi.gov.ru):
+      # enableAIAcaIssuers=true + allowedAIALocations (снимает deny-all фильтр JDK 21 для CDP Нац.УЦ).
+      # Валидация сохраняется, но смена Sub CA больше не ломает бота.
+      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true -Xms96m -Xmx256m -Dfile.encoding=UTF-8 -Duser.timezone=Europe/Moscow -Dcom.sun.security.enableAIAcaIssuers=true -Dcom.sun.security.allowedAIALocations=http://nuc-cdp.digital.gov.ru
+    # Telegram в РФ заблокирован не полностью: часть адресов доступна.
+    # 149.154.167.220 проверен вживую — Bot API через него отвечает.
+    # Временная мера, пока не поднят собственный прокси (VPN-сервер пока не проксирует).
+    extra_hosts:
+      - "api.telegram.org:149.154.167.220"
     restart: unless-stopped
+    # Потолок памяти контейнера. Без него JVM видит всю память ХОСТА (874 МБ) и ставит
+    # heap 25% = 220 МБ; при разрастании давила бы на хост целиком. Теперь предел явный,
+    # а -Xmx256m внутри лимита оставляет запас на метаспейс и native-память.
+    mem_limit: 512m
+    # Потолок на stdout-логи контейнера. Без него json-log рос без ограничений и
+    # 26.08.2026 забил диск под 100%: бот перестал писать в БД и логи, но продолжал
+    # публиковать — лоты уходили в чат по кругу.
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
