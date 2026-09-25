@@ -125,10 +125,14 @@ public class Config {
         return (key != null && key.isBlank()) ? null : key;
     }
 
-    /** Ключ Геосаджеста — запасной поиск, когда геокодер не узнаёт адрес в записи организатора. */
+    /**
+     * Ключ Геосаджеста — запасной поиск, когда геокодер не узнаёт адрес в записи организатора.
+     * Один ключ в кабинете привязывается сразу к обоим продуктам, поэтому отдельная переменная
+     * необязательна: если её нет, берём ключ геокодера.
+     */
     public static String getYandexSuggestKey() {
         String key = getEnvOrProperty("YANDEX_SUGGEST_KEY", "yandex.suggestKey", null);
-        return (key != null && key.isBlank()) ? null : key;
+        return (key == null || key.isBlank()) ? getYandexGeocoderKey() : key;
     }
 
     public static String getProxyHost() {
