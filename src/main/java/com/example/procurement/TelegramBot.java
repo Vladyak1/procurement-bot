@@ -376,8 +376,7 @@ public class TelegramBot extends TelegramLongPollingBot {
             }
             if (chatId == Config.getAdminGroupId()) {
                 // Ответ на запрос точки: админ присылает ссылку на Яндекс.Карты reply-сообщением
-                if (handlePointReply(chatId, update.getMessage().getReplyToMessage(),
-                        mainText, userIdStr, adminIds)) {
+                if (handlePointReply(chatId, update.getMessage(), mainText, userIdStr, adminIds)) {
                     return;
                 }
                 if (isParseCmd) {
@@ -898,9 +897,13 @@ public class TelegramBot extends TelegramLongPollingBot {
      * Обрабатывает ответ админа со ссылкой на карту: ставит точку и публикует лот.
      * @return true, если сообщение было ответом на запрос точки (дальше его обрабатывать не нужно)
      */
-    private boolean handlePointReply(long chatId, org.telegram.telegrambots.meta.api.objects.Message replyTo,
+    private boolean handlePointReply(long chatId, org.telegram.telegrambots.meta.api.objects.Message message,
                                      String text, String userIdStr, List<String> adminIds) {
-        if (replyTo == null || text == null || userIdStr == null || !adminIds.contains(userIdStr)) {
+        if (message == null || userIdStr == null || !adminIds.contains(userIdStr)) {
+            return false;
+        }
+        org.telegram.telegrambots.meta.api.objects.Message replyTo = message.getReplyToMessage();
+        if (replyTo == null) {
             return false;
         }
         DatabaseManager db = AppContext.getDatabaseManager();
@@ -908,11 +911,25 @@ public class TelegramBot extends TelegramLongPollingBot {
         if (lotNumber == null) {
             return false;
         }
-        double[] point = parseYandexMapsLink(text);
+        // Геопозиция Telegram — самый простой для админа способ: «Прикрепить → Геопозиция»
+        double[] point = null;
+        if (message.getLocation() != null) {
+            point = new double[]{message.getLocation().getLatitude(), message.getLocation().getLongitude()};
+            log.info("Точка получена геопозицией Telegram: {},{}", point[0], point[1]);
+        }
         if (point == null) {
-            sendMessageWithRetry(chatId, "Не разобрал координаты в ссылке. "
-                    + "Нужна ссылка вида https://yandex.ru/maps/?ll=33.45,44.58&z=17&pt=33.45,44.58 — "
-                    + "её даёт «Поделиться» на Яндекс.Картах.");
+            point = parseMapPoint(text);
+        }
+        if (point == null) {
+            log.warn("Не удалось разобрать точку из ответа админа по лоту {}: {}", lotNumber,
+                    text == null ? "(сообщение без текста)" : text);
+            sendMessageWithRetry(chatId, "Не разобрал координаты.\n\n"
+                    + "Если это ссылка «Поделиться» на найденный объект, координат в ней нет: "
+                    + "она ведёт на карточку объекта. Нужна ссылка именно на место:\n"
+                    + "• Яндекс.Карты: правой кнопкой по нужной точке → «Что здесь?», затем скопировать "
+                    + "ссылку из адресной строки браузера;\n"
+                    + "• геопозиция: «Прикрепить → Геопозиция» ответом на это сообщение;\n"
+                    + "• просто два числа: 44.5801, 33.4980.");
             return true;
         }
         Procurement p = db.getProcurementByNumber(lotNumber);
@@ -920,6 +937,17 @@ public class TelegramBot extends TelegramLongPollingBot {
             sendMessageWithRetry(chatId, "Лот " + lotNumber + " больше не найден в базе.");
             db.deletePendingPointRequest(lotNumber);
             return true;
+        }
+        // Дообогащаем лот перед публикацией: ссылки на фотографии в БД не хранятся,
+        // а сюда лот приходит именно из БД — без этого карточка уходит без фото.
+        // Точку админа накладываем ПОСЛЕ обогащения, иначе enrich вернёт координаты
+        // организатора и затрёт её.
+        if (p.getSource() != null && p.getSource().contains("Torgi")) {
+            ParserService parser = AppContext.getParserService();
+            if (parser != null) {
+                p.setImageUrls(new java.util.ArrayList<>());
+                parser.enrichOne(p);
+            }
         }
         p.setLat(point[0]);
         p.setLon(point[1]);
@@ -939,31 +967,92 @@ public class TelegramBot extends TelegramLongPollingBot {
         return true;
     }
 
+    /** Широта в пределах России, для распознавания порядка чисел. */
+    private static boolean looksLikeLat(double v) { return v >= 41 && v <= 82; }
+    /** Долгота в пределах России. */
+    private static boolean looksLikeLon(double v) { return v >= 19 && v <= 180; }
+
     /**
-     * Достаёт координаты из ссылки на Яндекс.Карты. Поддерживает форматы, которые реально
-     * отдаёт кнопка «Поделиться»: параметры ll/pt (порядок lon,lat) и whatshere[point].
+     * Достаёт координаты из ответа админа: ссылка на карту или пара чисел.
      *
-     * @return массив {lat, lon} либо null
+     * Поддерживаются форматы, которые реально дают кнопки «Поделиться» и «Что здесь?»:
+     * Яндекс.Карты (ll, pt, whatshere[point] — у них порядок долгота,широта), Google Maps
+     * (@шир,долг и q=шир,долг), 2ГИС (m=долг,шир), а также просто пара чисел, скопированная
+     * из карточки объекта. Короткие ссылки (yandex.ru/maps/-/…, maps.app.goo.gl) разворачиваются
+     * по редиректу.
+     *
+     * @return массив {широта, долгота} либо null
      */
-    static double[] parseYandexMapsLink(String text) {
-        if (text == null) {
+    static double[] parseMapPoint(String text) {
+        if (text == null || text.isBlank()) {
             return null;
         }
-        java.util.regex.Matcher m = java.util.regex.Pattern
-                .compile("(?:pt|ll|whatshere\\[point\\])=(-?\\d+\\.\\d+)(?:,|%2C)(-?\\d+\\.\\d+)")
-                .matcher(text);
+        // Явные параметры карт, где порядок долгота,широта
+        double[] p = matchPair(text, "(?:pt|ll|sll|m|whatshere(?:\\[|%5B)point(?:\\]|%5D))=(-?\\d+\\.\\d+)(?:,|%2C)(-?\\d+\\.\\d+)", false);
+        if (p != null) return p;
+        // Google Maps: @широта,долгота и q=широта,долгота
+        p = matchPair(text, "[@?&](?:q=|ll=)?(-?\\d+\\.\\d+),(-?\\d+\\.\\d+)", true);
+        if (p != null) return p;
+
+        String expanded = expandShortLink(text);
+        if (expanded != null) {
+            double[] fromLink = parseMapPoint(expanded);
+            if (fromLink != null) return fromLink;
+        }
+        // Просто два числа в сообщении: «44.5801, 33.4980»
+        return matchPair(text, "(-?\\d{1,3}\\.\\d{3,}+)[,;\\s]+(-?\\d{1,3}\\.\\d{3,}+)", true);
+    }
+
+    /**
+     * @param latFirst ожидается ли широта первой; порядок всё равно перепроверяется по диапазонам —
+     *                 люди присылают числа в обоих вариантах, а перепутанные координаты уводят
+     *                 метку в другую страну
+     */
+    private static double[] matchPair(String text, String regex, boolean latFirst) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(regex).matcher(text);
         if (!m.find()) {
             return null;
         }
         try {
-            // Яндекс отдаёт долготу первой
-            double lon = Double.parseDouble(m.group(1));
-            double lat = Double.parseDouble(m.group(2));
-            if (Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+            double a = Double.parseDouble(m.group(1));
+            double b = Double.parseDouble(m.group(2));
+            double lat = latFirst ? a : b;
+            double lon = latFirst ? b : a;
+            if (!looksLikeLat(lat) && looksLikeLat(lon) && looksLikeLon(lat)) {
+                double t = lat; lat = lon; lon = t;
+            }
+            if (Math.abs(lat) > 90 || Math.abs(lon) > 180 || (lat == 0 && lon == 0)) {
                 return null;
             }
             return new double[]{lat, lon};
         } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** Разворачивает короткую ссылку карт: координаты прячутся за редиректом. */
+    private static String expandShortLink(String text) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("https?://[\\w.-]*(?:yandex\\.[a-z]+/maps/-/|maps\\.app\\.goo\\.gl/|goo\\.gl/maps/|go\\.2gis\\.com/)\\S+")
+                .matcher(text);
+        if (!m.find()) {
+            return null;
+        }
+        String url = m.group();
+        try {
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) java.net.URI.create(url).toURL().openConnection();
+            conn.setInstanceFollowRedirects(false);
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(10000);
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+            String location = conn.getHeaderField("Location");
+            conn.disconnect();
+            if (location != null) {
+                log.info("Короткая ссылка развёрнута: {}", location.length() > 160 ? location.substring(0, 160) : location);
+            }
+            return location;
+        } catch (Exception e) {
+            log.warn("Не удалось развернуть короткую ссылку {}: {}", url, e.getMessage());
             return null;
         }
     }
