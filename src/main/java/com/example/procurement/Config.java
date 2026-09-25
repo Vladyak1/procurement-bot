@@ -116,6 +116,21 @@ public class Config {
         return (key != null && key.isBlank()) ? null : key;
     }
 
+    /**
+     * Ключ Яндекс Геокодера: координаты по адресу для участков, которых нет ни в ЕГРН через НСПД,
+     * ни с точной геопривязкой в ФИАС. Без ключа бот работает как раньше — спрашивает точку у админа.
+     */
+    public static String getYandexGeocoderKey() {
+        String key = getEnvOrProperty("YANDEX_GEOCODER_KEY", "yandex.geocoderKey", null);
+        return (key != null && key.isBlank()) ? null : key;
+    }
+
+    /** Ключ Геосаджеста — запасной поиск, когда геокодер не узнаёт адрес в записи организатора. */
+    public static String getYandexSuggestKey() {
+        String key = getEnvOrProperty("YANDEX_SUGGEST_KEY", "yandex.suggestKey", null);
+        return (key != null && key.isBlank()) ? null : key;
+    }
+
     public static String getProxyHost() {
         String host = getEnvOrProperty("PROXY_HOST", "proxy.host", null);
         return (host != null && host.isBlank()) ? null : host;

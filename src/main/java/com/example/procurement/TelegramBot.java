@@ -638,6 +638,7 @@ public class TelegramBot extends TelegramLongPollingBot {
             // проставленный один на всё многолотовое извещение, — метка уехала бы в центр города.
             boolean pointTrusted = hasPoint
                     && (Procurement.POINT_SOURCE_CADASTRAL.equals(procurement.getPointSource())
+                        || Procurement.POINT_SOURCE_YANDEX.equals(procurement.getPointSource())
                         || Procurement.POINT_SOURCE_MANUAL.equals(procurement.getPointSource())
                         || !AppContext.getDatabaseManager().isSharedPoint(
                                 procurement.getLat(), procurement.getLon(), procurement.getAddress()));
@@ -1066,6 +1067,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     private void resolveCadastralPoint(Procurement procurement) {
         if (procurement == null
                 || Procurement.POINT_SOURCE_CADASTRAL.equals(procurement.getPointSource())
+                || Procurement.POINT_SOURCE_YANDEX.equals(procurement.getPointSource())
                 || Procurement.POINT_SOURCE_MANUAL.equals(procurement.getPointSource())) {
             return;
         }

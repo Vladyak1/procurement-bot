@@ -814,6 +814,7 @@ public class ProcurementProcessingService {
     private boolean ensureAccuratePoint(Procurement p) {
         boolean hasPoint = p.getLat() != null && p.getLon() != null;
         boolean alreadyExact = Procurement.POINT_SOURCE_CADASTRAL.equals(p.getPointSource())
+                || Procurement.POINT_SOURCE_YANDEX.equals(p.getPointSource())
                 || Procurement.POINT_SOURCE_MANUAL.equals(p.getPointSource());
         if (alreadyExact) {
             return true;
@@ -824,7 +825,9 @@ public class ProcurementProcessingService {
             return true;
         }
         if (p.getCadastralNumber() == null || p.getCadastralNumber().isBlank()) {
-            return true; // уточнять нечем — публикуем с тем, что есть
+            // Уточнять по кадастру нечем, остаётся адрес; не нашлось — публикуем с тем, что есть
+            applyYandexPoint(p);
+            return true;
         }
 
         CadastralGeocoder.Point egrn = CadastralGeocoder.resolve(p.getCadastralNumber());
@@ -837,6 +840,12 @@ public class ProcurementProcessingService {
             return true;
         }
 
+        // Участки в СНТ в ЕГРН через НСПД достаются далеко не всегда, а на карте их находят по
+        // названию товарищества и номеру участка — это последняя попытка перед вопросом админу
+        if (applyYandexPoint(p)) {
+            return true;
+        }
+
         long daysLeft = daysUntilDeadline(p);
         if (daysLeft >= 0 && daysLeft < POINT_WAIT_MIN_DAYS_LEFT) {
             log.warn("Лот {}: координаты из ЕГРН не получены, но до окончания подачи {} дн. — публикуем как есть",
@@ -846,6 +855,24 @@ public class ProcurementProcessingService {
         log.info("Лот {} отложен: НСПД не отдал координаты по кадастру {} (в запасе {} дн.)",
                 p.getNumber(), p.getCadastralNumber(), daysLeft);
         return false;
+    }
+
+    /**
+     * Ставит лоту точку от Яндекс Геокодера, если тот знает адрес точно.
+     *
+     * @return true, если координаты проставлены
+     */
+    private boolean applyYandexPoint(Procurement p) {
+        YandexGeocoder.Point point = YandexGeocoder.resolveByAddress(p.getAddress());
+        if (point == null) {
+            return false;
+        }
+        p.setLat(point.getLat());
+        p.setLon(point.getLon());
+        p.setPointSource(Procurement.POINT_SOURCE_YANDEX);
+        databaseManager.updateCoordinates(p.getNumber(), point.getLat(), point.getLon(),
+                Procurement.POINT_SOURCE_YANDEX);
+        return true;
     }
 
     /** Дней до окончания подачи заявок; -1, если дату разобрать не удалось. */

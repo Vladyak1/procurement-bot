@@ -46,6 +46,8 @@ public class Procurement {
     public static final String POINT_SOURCE_CADASTRAL = "cadastral";
     /** Координаты из поля point на torgi.gov.ru — в многолотовых извещениях это адрес организатора. */
     public static final String POINT_SOURCE_TORGI = "torgi";
+    /** Координаты найдены Яндекс Геокодером по адресу — так находятся участки в СНТ. */
+    public static final String POINT_SOURCE_YANDEX = "yandex";
     /** Точку задал админ вручную, ответив ссылкой на Яндекс.Карты. */
     public static final String POINT_SOURCE_MANUAL = "manual";
 }
