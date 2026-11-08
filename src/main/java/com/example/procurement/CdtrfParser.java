@@ -2,6 +2,8 @@ package com.example.procurement;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.URI;
@@ -38,7 +40,11 @@ public class CdtrfParser {
     // (проверено 31.08.2026: RegionId=92 и пустой RegionId дают идентичную выдачу,
     // всего в базе ~362 тыс. лотов). Из-за этого в выдачу лезли Екатеринбург,
     // Краснодарский край, Чечня, Иркутская область — 91 чужой лот ждал публикации.
-    private static final String LIST_URL = API + "Trade/trades?PageSize=200&PageNum=1&RegionIds=92&Sort=";
+    // С 05.11.2026 API отвечает 400 на PageSize > 100 — листинг собираем постранично.
+    private static final String LIST_URL = API + "Trade/trades?PageSize=%d&PageNum=%d&RegionIds=92&Sort=";
+    private static final int PAGE_SIZE = 100;
+    /** Предохранитель от бесконечного листания, если API снова начнёт игнорировать фильтр региона. */
+    private static final int MAX_PAGES = 10;
     /** Код региона Севастополя в ЦДТРФ — страховка на случай нового переименования параметра. */
     private static final String SEVASTOPOL_REGION_ID = "92";
     private static final String DETAIL_URL = API + "Trade/public/"; // + tradeId
@@ -92,7 +98,7 @@ public class CdtrfParser {
     public List<Procurement> parse(int maxCount) {
         List<Procurement> result = new ArrayList<>();
         try {
-            JsonNode listing = getJson(LIST_URL);
+            JsonNode listing = getListing();
             JsonNode items = listing.path("items");
             cachedListingItems = items; // переиспользуем в parseCompletedStatuses()
             if (!items.isArray()) {
@@ -148,7 +154,7 @@ public class CdtrfParser {
         Map<String, String> result = new HashMap<>();
         try {
             // Переиспользуем листинг из parse() (если был), иначе тянем заново
-            JsonNode items = cachedListingItems != null ? cachedListingItems : getJson(LIST_URL).path("items");
+            JsonNode items = cachedListingItems != null ? cachedListingItems : getListing().path("items");
             if (items.isArray()) {
                 for (JsonNode it : items) {
                     String desc = it.path("tradeStatusDescription").asText("");
@@ -277,6 +283,32 @@ public class CdtrfParser {
             return parseRuNumber(abs.group(1));
         }
         return null;
+    }
+
+    /**
+     * Все страницы листинга региона, склеенные в один {"items": [...]}.
+     * Если первая страница пришла без массива items (ошибка API), возвращается она как есть.
+     */
+    private JsonNode getListing() throws Exception {
+        ArrayNode all = mapper.createArrayNode();
+        for (int page = 1; page <= MAX_PAGES; page++) {
+            JsonNode resp = getJson(String.format(LIST_URL, PAGE_SIZE, page));
+            JsonNode items = resp.path("items");
+            if (!items.isArray()) {
+                if (page == 1) {
+                    return resp;
+                }
+                log.warn("ЦДТРФ: страница {} листинга без items, берём {} лотов с предыдущих", page, all.size());
+                break;
+            }
+            all.addAll((ArrayNode) items);
+            if (items.size() < PAGE_SIZE || all.size() >= resp.path("totalCount").asInt(Integer.MAX_VALUE)) {
+                break;
+            }
+        }
+        ObjectNode listing = mapper.createObjectNode();
+        listing.set("items", all);
+        return listing;
     }
 
     private JsonNode getJson(String url) throws Exception {
