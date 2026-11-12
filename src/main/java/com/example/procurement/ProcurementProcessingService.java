@@ -483,7 +483,10 @@ public class ProcurementProcessingService {
         List<Procurement> procurements = parser.parse(maxCount);
         databaseManager.saveProcurements(procurements);
         List<Procurement> newProcurements = databaseManager.getNewProcurements(procurements);
-        boolean healthy = checkSourceHealth("ЦДТРФ", procurements.size());
+        // На ЦДТРФ по Севастополю неделями может не быть ни одного активного лота (так было
+        // в ноябре 2026: 113 лотов в листинге, все завершены). Ноль при живом листинге — затишье,
+        // а не поломка; тревожиться стоит, когда не пришёл сам листинг.
+        boolean healthy = checkSourceHealth("ЦДТРФ", procurements.size(), parser.getLastListingSize() > 0);
 
         int published = 0;
         for (Procurement p : newProcurements) {
@@ -636,6 +639,14 @@ public class ProcurementProcessingService {
      *  • лотов внезапно в {@value #SPIKE_FACTOR}+ раз больше обычного — вероятно, перестал работать фильтр.
      */
     private boolean checkSourceHealth(String source, int lotCount) {
+        return checkSourceHealth(source, lotCount, false);
+    }
+
+    /**
+     * @param zeroIsNormal источник подтвердил, что ответил штатно (например, листинг пришёл,
+     *                     но подходящих лотов в нём нет) — тогда серия нулей не считается поломкой
+     */
+    private boolean checkSourceHealth(String source, int lotCount, boolean zeroIsNormal) {
         try {
             databaseManager.recordSourceRun(source, lotCount);
             java.util.List<Integer> recent = databaseManager.getRecentSourceCounts(source, 30);
@@ -649,7 +660,7 @@ public class ProcurementProcessingService {
 
             String problem = null;
             boolean spike = false;
-            if (lotCount == 0) {
+            if (lotCount == 0 && !zeroIsNormal) {
                 boolean allZero = true;
                 for (int i = 0; i < Math.min(ZERO_RUNS_TO_ALERT, recent.size()); i++) {
                     if (recent.get(i) != 0) {

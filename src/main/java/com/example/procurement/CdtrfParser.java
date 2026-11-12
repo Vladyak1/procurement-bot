@@ -89,6 +89,9 @@ public class CdtrfParser {
     // Кеш листинга: parse() и parseCompletedStatuses() в одном прогоне используют одну выдачу,
     // чтобы не дёргать Trade/trades дважды.
     private JsonNode cachedListingItems;
+    // Сколько лотов региона пришло в листинге последнего parse(); -1 — листинг не получен.
+    // Отличает затишье на площадке (листинг есть, активных нет) от поломки парсера.
+    private int lastListingSize = -1;
 
     /**
      * Парсит активные лоты недвижимости из Севастополя.
@@ -97,6 +100,7 @@ public class CdtrfParser {
      */
     public List<Procurement> parse(int maxCount) {
         List<Procurement> result = new ArrayList<>();
+        lastListingSize = -1;
         try {
             JsonNode listing = getListing();
             JsonNode items = listing.path("items");
@@ -105,6 +109,7 @@ public class CdtrfParser {
                 log.warn("ЦДТРФ: поле items не массив, ответ: {}", listing.toString().substring(0, Math.min(200, listing.toString().length())));
                 return result;
             }
+            lastListingSize = items.size();
             log.info("ЦДТРФ: в листинге региона 92 — {} лотов", items.size());
 
             for (JsonNode it : items) {
@@ -289,6 +294,11 @@ public class CdtrfParser {
      * Все страницы листинга региона, склеенные в один {"items": [...]}.
      * Если первая страница пришла без массива items (ошибка API), возвращается она как есть.
      */
+    /** Размер листинга региона из последнего {@link #parse(int)}; -1, если листинг не получен. */
+    public int getLastListingSize() {
+        return lastListingSize;
+    }
+
     private JsonNode getListing() throws Exception {
         ArrayNode all = mapper.createArrayNode();
         for (int page = 1; page <= MAX_PAGES; page++) {
