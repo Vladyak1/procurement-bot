@@ -70,3 +70,7 @@ TROUBLESHOOTING.md
 # Локальные утилиты под конкретную машину (жёсткие пути, запуск вне Docker)
 check-and-stop.bat
 compile.bat
+
+# Прокси до Telegram: конфиг туннеля с приватным ключом и конфиги xray (с резервными копиями)
+tg-tunnel/
+xray-client.json*

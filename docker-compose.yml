@@ -16,9 +16,9 @@ services:
       # enableAIAcaIssuers=true + allowedAIALocations (снимает deny-all фильтр JDK 21 для CDP Нац.УЦ).
       # Валидация сохраняется, но смена Sub CA больше не ломает бота.
       - JAVA_OPTS=-Djava.net.preferIPv4Stack=true -Xms96m -Xmx256m -Dfile.encoding=UTF-8 -Duser.timezone=Europe/Moscow -Dcom.sun.security.enableAIAcaIssuers=true -Dcom.sun.security.allowedAIALocations=http://nuc-cdp.digital.gov.ru
-    # Telegram в РФ заблокирован не полностью: часть адресов доступна.
-    # 149.154.167.220 проверен вживую — Bot API через него отвечает.
-    # Временная мера, пока не поднят собственный прокси (VPN-сервер пока не проксирует).
+    # Адрес Bot API закреплён, чтобы не зависеть от DNS. С 12.11.2026 бот ходит в Telegram
+    # через SOCKS-прокси tg-tunnel (PROXY_HOST в .env): напрямую с российского адреса
+    # соединения с api.telegram.org то и дело обрывались по таймауту.
     extra_hosts:
       - "api.telegram.org:149.154.167.220"
     restart: unless-stopped
@@ -34,3 +34,44 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Туннель AmneziaWG до VPN на Hetzner — только для Telegram. В AllowedIPs конфига лишь сети
+  # Telegram, так что площадки, НСПД и Яндекс туннель не трогает (им нужен российский адрес).
+  # Почему AmneziaWG, а не прокси-протокол: 12.11.2026 с этого сервера до Hetzner резались
+  # TLS с чужим SNI (VLESS+Reality) и через пару минут — Shadowsocks-2022; UDP AmneziaWG проходит.
+  # Конфиг tg-tunnel/awg-tg.conf с приватным ключом — только на сервере, в git не попадает;
+  # клиент на Hetzner виден в приложении Amnezia как «procurement-bot (Telegram)».
+  tg-tunnel:
+    image: amneziavpn/amneziawg-go@sha256:cbafc02b8373a83f428272db6d8001b37bc02e6211cbd8c0cb4e2e3759b12b72
+    entrypoint: ["sh", "-c", "awg-quick up /etc/amnezia/amneziawg/awg-tg.conf && exec sleep infinity"]
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./tg-tunnel/awg-tg.conf:/etc/amnezia/amneziawg/awg-tg.conf:ro
+    restart: unless-stopped
+    mem_limit: 64m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "2"
+
+  # SOCKS5 на tg-tunnel:1080 в сетевом пространстве туннеля — через него бот и ходит в Telegram.
+  # Делит сеть с tg-tunnel: после перезапуска туннеля перезапускать и его (docker compose up -d).
+  xray-client:
+    image: ghcr.io/xtls/xray-core:26.6.1
+    command: ["run", "-c", "/etc/xray/config.json"]
+    network_mode: "service:tg-tunnel"
+    depends_on:
+      - tg-tunnel
+    volumes:
+      - ./xray-client.json:/etc/xray/config.json:ro
+    restart: unless-stopped
+    mem_limit: 64m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "2"
